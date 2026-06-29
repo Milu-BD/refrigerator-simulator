@@ -32,8 +32,6 @@ if 'reviewer_logged_in' not in st.session_state:
     st.session_state.reviewer_logged_in = False
 
 tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', 'tvc']
-
-# Reverted back to the original 4 core metrics
 metric_types = ['Mean', 'Min', 'Max', '(Max+Min)/2']
 
 # --- CORE INTERPOLATION SIMULATION ENGINE ---
@@ -138,7 +136,6 @@ with tab1:
             output_table = run_manual_simulation(vol_records, user_pulldown, sensor_target)
             
             if output_table is not None:
-                # FIXED: Displays a clear header sub-title text explicitly above the dataframe table grid
                 st.markdown("`Metric_Type` | `tf-1` | `tf-2` | `tf-3` | `tf-4` | `tf-5` | `tc-1` | `tc-2` | `tc-3` | `tvc`")
                 st.dataframe(output_table.style.format(precision=2), use_container_width=True)
             else:
@@ -161,15 +158,26 @@ with tab2:
                 p_data[feat] = p_cols[idx].number_input(f"{feat}", value=-25.0, key=f"p_{s}_{feat}")
             p_data['Sensor'] = p_cols[9].number_input("Sensor", value=-25.0, key=f"p_{s}_sens")
             
-            # FIXED: Title label updated cleanly to reflect header targets cleanly
-            st.markdown("**Respected Outputs (Mean, Min, Max, (Max+Min)/2):**")
+            st.markdown("---")
+            st.markdown("**Respected Outputs:**")
+            
+            # FIXED: We generate a layout header row exactly below the section title and above the input boxes
+            header_cols = st.columns(11)
+            header_cols[0].markdown("**Metric_Type**")
+            for idx, feat in enumerate(tc_features):
+                header_cols[idx+1].markdown(f"**{feat}**")
+            header_cols[10].markdown("**Sensor**")
+            
             out_rows = []
             for metric in metric_types:
                 m_cols = st.columns(11)
                 m_cols[0].markdown(f"**{metric}**")
                 m_data = {"Metric_Type": metric}
+                
                 for idx, feat in enumerate(tc_features):
+                    # label_visibility="collapsed" keeps the form perfectly linear and flat as requested
                     m_data[feat] = m_cols[idx+1].number_input(f"{feat}", value=0.0, label_visibility="collapsed", key=f"m_{s}_{metric}_{feat}")
+                
                 m_data['Sensor'] = m_cols[10].number_input("Sensor Target", value=0.0, label_visibility="collapsed", key=f"m_{s}_{metric}_sens")
                 out_rows.append(m_data)
                 

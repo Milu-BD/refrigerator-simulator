@@ -33,8 +33,8 @@ if 'reviewer_logged_in' not in st.session_state:
 
 tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', 'tvc']
 
-# UPDATED: Added 'Respected' as the 5th structural metric row
-metric_types = ['Mean', 'Min', 'Max', '(Max+Min)/2', 'Respected']
+# Reverted back to the original 4 core metrics
+metric_types = ['Mean', 'Min', 'Max', '(Max+Min)/2']
 
 # --- CORE INTERPOLATION SIMULATION ENGINE ---
 def run_manual_simulation(volume_records, pulldown_input, target_sensor):
@@ -134,8 +134,12 @@ with tab1:
         
         for lvl_name, sensor_target in sensor_levels:
             st.markdown(f"##### 📍 Outputs for **{lvl_name}** (Target Sensor Temp: `{sensor_target}°C`)")
+            
             output_table = run_manual_simulation(vol_records, user_pulldown, sensor_target)
+            
             if output_table is not None:
+                # FIXED: Displays a clear header sub-title text explicitly above the dataframe table grid
+                st.markdown("`Metric_Type` | `tf-1` | `tf-2` | `tf-3` | `tf-4` | `tf-5` | `tc-1` | `tc-2` | `tc-3` | `tvc`")
                 st.dataframe(output_table.style.format(precision=2), use_container_width=True)
             else:
                 st.error(f"Could not compute matrix for {lvl_name}. Ensure adequate data is saved in training room.")
@@ -151,101 +155,4 @@ with tab2:
         for s in range(int(num_sets)):
             st.markdown(f"### 📊 Dataset Block #{s+1}")
             st.markdown("**Pulldown Initialization Values:**")
-            p_cols = st.columns(10)
-            p_data = {}
-            for idx, feat in enumerate(tc_features):
-                p_data[feat] = p_cols[idx].number_input(f"{feat}", value=-25.0, key=f"p_{s}_{feat}")
-            p_data['Sensor'] = p_cols[9].number_input("Sensor", value=-25.0, key=f"p_{s}_sens")
-            
-            # UPDATED: This dynamic code segment now loops 5 times instead of 4, adding the 'Respected' tracking fields
-            st.markdown("**Respected Outputs (Mean, Min, Max, (Max+Min)/2, Respected):**")
-            out_rows = []
-            for metric in metric_types:
-                m_cols = st.columns(11)
-                m_cols[0].markdown(f"**{metric}**")
-                m_data = {"Metric_Type": metric}
-                for idx, feat in enumerate(tc_features):
-                    m_data[feat] = m_cols[idx+1].number_input(f"{feat}", value=0.0, label_visibility="collapsed", key=f"m_{s}_{metric}_{feat}")
-                m_data['Sensor'] = m_cols[10].number_input("Sensor Target", value=0.0, label_visibility="collapsed", key=f"m_{s}_{metric}_sens")
-                out_rows.append(m_data)
-                
-            submitted_data_sets[f"set_{len(st.session_state.db.get(selected_volume, {})) + s}"] = {
-                "pulldown": p_data,
-                "outputs": out_rows
-            }
-            st.markdown("---")
-            
-        if st.form_submit_button("Commit Data Blocks to Memory Banks"):
-            if selected_volume not in st.session_state.db:
-                st.session_state.db[selected_volume] = {}
-            for k, v in submitted_data_sets.items():
-                st.session_state.db[selected_volume][k] = v
-            save_memory(st.session_state.db)
-            st.success(f"Retrained matrix for [{selected_volume}] successfully!")
-            st.rerun()
-
-# ================= TAB 3: SECURED REVIEWER DASHBOARD =================
-with tab3:
-    st.subheader("🔒 Reviewer Audit Room")
-    
-    if not st.session_state.reviewer_logged_in:
-        col_sec1, col_sec2 = st.columns([1, 2])
-        with col_sec1:
-            entered_password = st.text_input("Enter Reviewer Security Key:", type="password")
-            if st.button("Unlock Dashboard Data"):
-                if entered_password == REVIEWER_PASSWORD:
-                    st.session_state.reviewer_logged_in = True
-                    st.success("Access Granted.")
-                    st.rerun()
-                else:
-                    st.error("Incorrect credentials. Access denied.")
-    else:
-        if st.button("🔒 Lock & Close Audit View"):
-            st.session_state.reviewer_logged_in = False
-            st.rerun()
-            
-        st.markdown(f"### 📋 Reviewing Dataset Profiles Saved for Model: **[{selected_volume}]**")
-        vol_records = st.session_state.db.get(selected_volume, {})
-        
-        if not vol_records:
-            st.info("No records available to review for this configuration model.")
-        else:
-            pulldown_rows_list = []
-            output_rows_list = []
-            
-            for set_id, content in vol_records.items():
-                p_row = {"Set_ID": set_id}
-                p_row.update(content["pulldown"])
-                pulldown_rows_list.append(p_row)
-                
-                for out_row in content["outputs"]:
-                    o_row = {"Set_ID": set_id}
-                    o_row.update(out_row)
-                    output_rows_list.append(o_row)
-            
-            df_review_pulldown = pd.DataFrame(pulldown_rows_list)
-            df_review_outputs = pd.DataFrame(output_rows_list)
-            
-            st.markdown("#### 🔍 Apply Dynamic Thermocouple Range Filters")
-            fc1, fc2, fc3 = st.columns(3)
-            with fc1:
-                filter_target = st.selectbox("Select Thermocouple to inspect:", tc_features)
-            with fc2:
-                filter_operator = st.selectbox("Logical Operator Condition:", ["Show All Data", "Less than or equal (<=)", "Greater than or equal (>=)"])
-            with fc3:
-                filter_value = st.number_input("Threshold Temperature Value (°C):", value=0.0, step=0.5)
-                
-            if filter_operator != "Show All Data":
-                if filter_operator == "Less than or equal (<=)":
-                    df_review_pulldown = df_review_pulldown[df_review_pulldown[filter_target] <= filter_value]
-                    df_review_outputs = df_review_outputs[df_review_outputs[filter_target] <= filter_value]
-                elif filter_operator == "Greater than or equal (>=)":
-                    df_review_pulldown = df_review_pulldown[df_review_pulldown[filter_target] >= filter_value]
-                    df_review_outputs = df_review_outputs[df_review_outputs[filter_target] >= filter_value]
-            
-            st.markdown("---")
-            st.markdown(f"**Historical Pulldown Baseline Data Matrix ({len(df_review_pulldown)} entries matches):**")
-            st.dataframe(df_review_pulldown.style.format(precision=2), use_container_width=True)
-            
-            st.markdown(f"**Historical Stabilization Segment Data Matrix ({len(df_review_outputs)} cycle rows matches):**")
-            st.dataframe(df_review_outputs.style.format(precision=2), use_container_width=True)
+            p_cols = st.columns(1

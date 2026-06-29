@@ -9,7 +9,7 @@ import os
 st.set_page_config(page_title="Refrigerator Simulator Hub", layout="wide")
 
 MEMORY_FILE = "simulator_memory.json"
-REVIEWER_PASSWORD = "Admin@Cooling2026"  # You can change your secure password here
+REVIEWER_PASSWORD = "Admin@Cooling2026"  # Modify password credentials here if required
 
 # --- SYSTEM MEMORY MANAGEMENT ---
 def load_memory():
@@ -32,7 +32,9 @@ if 'reviewer_logged_in' not in st.session_state:
     st.session_state.reviewer_logged_in = False
 
 tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', 'tvc']
-metric_types = ['Mean', 'Min', 'Max', '(Max+Min)/2']
+
+# UPDATED: Added 'Respected' as the 5th structural metric row
+metric_types = ['Mean', 'Min', 'Max', '(Max+Min)/2', 'Respected']
 
 # --- CORE INTERPOLATION SIMULATION ENGINE ---
 def run_manual_simulation(volume_records, pulldown_input, target_sensor):
@@ -66,7 +68,7 @@ def run_manual_simulation(volume_records, pulldown_input, target_sensor):
         if len(X_train) == 0:
             return None
             
-        # Machine learning dynamic curve tracking matching Cell 2 logic
+        # Machine learning dynamic curve tracking based on geometric distance
         knn = KNeighborsRegressor(n_neighbors=min(3, len(X_train)), weights='distance')
         knn.fit(X_train, y_train)
         
@@ -111,7 +113,6 @@ with tab1:
         u_cols = st.columns(9)
         user_pulldown = []
         for i, feat in enumerate(tc_features):
-            # Safe default fallback matching Cell 3 settings
             default_val = -29.2 if feat=='tf-1' else (-27.0 if feat=='tf-2' else (-28.4 if feat=='tf-3' else (-29.8 if feat=='tf-4' else (-30.5 if feat=='tf-5' else (-3.0 if feat=='tc-1' else (-4.1 if feat=='tc-2' else (-5.4 if feat=='tc-3' else 1.4)))))))
             val = u_cols[i].number_input(f"{feat}:", value=default_val, key=f"sim_run_{feat}")
             user_pulldown.append(val)
@@ -123,7 +124,6 @@ with tab1:
         sensor_levels = []
         level_cols = st.columns(int(num_set_levels))
         
-        # Dynamically request inputs backward from Level-X down to Level-1
         for i in range(int(num_set_levels), 0, -1):
             col_idx = int(num_set_levels) - i
             s_val = level_cols[col_idx].number_input(f"Sensor Value (Level-{i}):", value=-21.5 + (col_idx * 2), key=f"sim_lvl_{i}")
@@ -157,7 +157,8 @@ with tab2:
                 p_data[feat] = p_cols[idx].number_input(f"{feat}", value=-25.0, key=f"p_{s}_{feat}")
             p_data['Sensor'] = p_cols[9].number_input("Sensor", value=-25.0, key=f"p_{s}_sens")
             
-            st.markdown("**Respected Outputs (Mean, Min, Max, (Max+Min)/2):**")
+            # UPDATED: This dynamic code segment now loops 5 times instead of 4, adding the 'Respected' tracking fields
+            st.markdown("**Respected Outputs (Mean, Min, Max, (Max+Min)/2, Respected):**")
             out_rows = []
             for metric in metric_types:
                 m_cols = st.columns(11)

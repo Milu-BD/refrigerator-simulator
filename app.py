@@ -112,10 +112,6 @@ with tab1:
         st.markdown("#### Step 1: Input Current Pulldown Telemetry Vector")
         u_cols = st.columns(9)
         new_pulldown_input = []
-        for i, feat in enumerate(tc_features):
-            st.markdown("#### Step 1: Input Current Pulldown Telemetry Vector")
-        u_cols = st.columns(9)
-        new_pulldown_input = []
         
         # Clean dictionary mapping for default values
         default_defaults = {
@@ -124,11 +120,10 @@ with tab1:
             'tc-2': 1.6,   'tc-3': 0.5,   'tvc': 8.1
         }
         
+        # Single loop, clean rendering, and unique non-clashing widget keys
         for i, feat in enumerate(tc_features):
             default_val = default_defaults.get(feat, 0.0)
-            val = u_cols[i].number_input(f"{feat}:", value=default_val, key=f"auto_run_{feat}")
-            new_pulldown_input.append(val)
-            val = u_cols[i].number_input(f"{feat}:", value=default_val, key=f"auto_run_{feat}")
+            val = u_cols[i].number_input(f"{feat}:", value=default_val, key=f"automated_sim_input_{feat}")
             new_pulldown_input.append(val)
             
         st.markdown("---")

@@ -352,35 +352,112 @@ with tab3:
                     else:
                         st.write("No CPT sub-matrix linked to this index slot.")
             
-            # --- DATABASE RE-COMMIT SAVE ENGINE ---
+            # ================= TAB 3: REVIEWER DASHBOARD =================
+with tab3:
+    st.subheader("🔒 Repository Memory Inspection & Manipulation")
+    
+    if not st.session_state.reviewer_logged_in:
+        pwd = st.text_input("Enter Reviewer Code Key:", type="password", key="reviewer_pwd_input")
+        if st.button("Unlock Database", key="reviewer_unlock_btn"):
+            if pwd == REVIEWER_PASSWORD:
+                st.session_state.reviewer_logged_in = True
+                st.rerun()
+    else:
+        col_header, col_lock = st.columns([4, 1])
+        with col_header:
+            st.markdown(f"### 🛠️ Dedicated Data Editor: **{selected_volume}** ({selected_ambient})")
+        with col_lock:
+            if st.button("Close Secure Lock", type="secondary", use_container_width=True):
+                st.session_state.reviewer_logged_in = False
+                st.rerun()
+                
+        # Safely fetch the current active array of paired records
+        if selected_volume not in st.session_state.db:
+            st.session_state.db[selected_volume] = {"32C": [], "43C": []}
+        records_list = st.session_state.db[selected_volume].get(ambient_key, [])
+        
+        if not records_list:
+            st.info(f"No paired records found to manipulate for {selected_volume} under the {selected_ambient} ambient.")
+        else:
+            st.markdown("#### 📐 Combined Data Matrix (Pulldown & Respected CPT Targets)")
+            st.caption("Each row represents one independent 2-file pair simulation profile. Double-click cells to edit. Select a row and hit 'Delete' on your keyboard to clear that entire dataset from memory entirely.")
+            
+            # Re-architect data into a flat spreadsheet structure where each row is an isolated 2-file slot
+            flattened_rows = []
+            for idx, r in enumerate(records_list):
+                row_dict = {"Slot ID": idx}
+                
+                # Prefix Pulldown features
+                p_data = r.get("pulldown_data", {})
+                for f in tc_features:
+                    row_dict[f"Pulldown_{f}"] = p_data.get(f, 0.0)
+                row_dict["Pulldown_Baseline_Sensor"] = r.get("pulldown_baseline_sensor", 0.0)
+                
+                # Extract connected CPT metric flags (focusing on standard reference flag headers parsed)
+                cpt_data = r.get("cpt_data", {})
+                first_flag = list(cpt_data.keys())[0] if cpt_data.keys() else "Unknown_Flag"
+                row_dict["CPT_Linked_Flag"] = first_flag
+                
+                # Flatten the 'mean' criteria metrics as editable samples in the row matrix
+                mean_cpt = cpt_data.get(first_flag, {}).get("mean", {})
+                for f in tc_features:
+                    row_dict[f"CPT_Mean_{f}"] = mean_cpt.get(f, 0.0)
+                row_dict["CPT_Mean_Sensor"] = mean_cpt.get("Sensor", 0.0)
+                
+                flattened_rows.append(row_dict)
+                
+            df_master_edit = pd.DataFrame(flattened_rows)
+            
+            # Render the unified matrix editor
+            edited_master_df = st.data_editor(
+                df_master_edit, 
+                hide_index=True, 
+                num_rows="dynamic", # Enables full row deletion capabilities
+                use_container_width=True,
+                key=f"master_editor_{selected_volume}_{ambient_key}"
+            )
+            
+            # --- DATABASE STRUCTURAL RE-COMMIT SAVE ENGINE ---
             st.markdown("---")
             if st.button("💾 Commit Manipulated Changes permanently to Disk", type="primary"):
                 try:
-                    # 1. Identify rows that were deleted by checking missing indexes
-                    remaining_indices = edited_pulldown_df["Record ID"].tolist() if "Record ID" in edited_pulldown_df.columns else []
+                    remaining_slots = edited_master_df["Slot ID"].tolist() if "Slot ID" in edited_master_df.columns else []
                     
-                    # Rebuild the records buffer matching only kept entries
                     updated_records = []
-                    for current_idx in remaining_indices:
-                        if current_idx < len(records_list):
-                            # Grab original block reference
-                            orig_block = records_list[current_idx]
+                    for current_slot in remaining_slots:
+                        if current_slot < len(records_list):
+                            # Retain original structure frame but override data values from edited UI row matrix
+                            orig_block = records_list[current_slot]
+                            ui_row = edited_master_df[edited_master_df["Slot ID"] == current_slot].iloc[0]
                             
-                            # Grab updated pulldown data row from the UI table
-                            ui_row = edited_pulldown_df[edited_pulldown_df["Record ID"] == current_idx].iloc[0]
-                            
-                            # Pack values back into correct format type
-                            updated_p_data = {f: float(ui_row.get(f, 0.0)) for f in tc_features}
-                            updated_sensor = float(ui_row.get("Baseline Sensor", 0.0))
-                            
+                            # 1. Update Pulldown block metrics
+                            updated_p_data = {f: float(ui_row.get(f"Pulldown_{f}", 0.0)) for f in tc_features}
                             orig_block["pulldown_data"] = updated_p_data
-                            orig_block["pulldown_baseline_sensor"] = updated_sensor
+                            orig_block["pulldown_baseline_sensor"] = float(ui_row.get("Pulldown_Baseline_Sensor", 0.0))
+                            
+                            # 2. Update Respected CPT block metrics
+                            flag_key = str(ui_row.get("CPT_Linked_Flag", "Unknown_Flag"))
+                            
+                            # Rebuild all 4 key metrics profiles consistently with user changes
+                            updated_cpt_metrics = {f: float(ui_row.get(f"CPT_Mean_{f}", 0.0)) for f in tc_features}
+                            updated_sensor_val = float(ui_row.get("CPT_Mean_Sensor", 0.0))
+                            
+                            # Re-map criteria sub-objects safely back to database frame schema
+                            orig_block["cpt_data"] = {
+                                flag_key: {
+                                    metric: {
+                                        **updated_cpt_metrics,
+                                        "Sensor": updated_sensor_val
+                                    } for metric in metric_types
+                                }
+                            }
+                            
                             updated_records.append(orig_block)
                     
-                    # 2. Update memory state and write to json
+                    # Overwrite state buffer cache and save changes to disk
                     st.session_state.db[selected_volume][ambient_key] = updated_records
                     save_memory(st.session_state.db)
-                    st.success("🎉 Database successfully updated and re-serialized to `simulator_memory.json`!")
+                    st.success("🎉 Combined dataset memory maps updated successfully!")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Failed to synchronize manual database adjustments: {str(e)}")
+                    st.error(f"Failed to synchronize combined database adjustments: {str(e)}")

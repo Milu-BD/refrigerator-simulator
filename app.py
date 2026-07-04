@@ -110,20 +110,58 @@ with tab1:
         st.warning(f"⚠️ No training data has been saved for **[{selected_volume}]** yet. Please visit the Data Repository Room to parse initial reports.")
     else:
         st.markdown("#### Step 1: Input Current Pulldown Telemetry Vector")
+        
+        # Local file uploader specifically for the running workspace simulation
+        sim_pulldown_file = st.file_uploader(
+            "Optional: Upload a Pulldown Excel Report to auto-fill telemetry cells (.xlsx)", 
+            type=["xlsx"], 
+            key="sim_tab_pulldown_uploader"
+        )
+        
+        # Initialize internal session states for holding the active user vector values if not present
+        if 'active_pulldown_form' not in st.session_state:
+            st.session_state.active_pulldown_form = {feat: 0.0 for feat in tc_features}
+            st.session_state.last_uploaded_sim_file = None
+
+        # If a file is uploaded and it hasn't been processed yet, parse and update the session state
+        if sim_pulldown_file and sim_pulldown_file != st.session_state.last_uploaded_sim_file:
+            try:
+                df_sim_p = pd.read_excel(sim_pulldown_file, sheet_name='Summary', header=1)
+                df_sim_p.columns = [str(c).strip() for c in df_sim_p.columns]
+                df_sim_p.iloc[:, 0] = df_sim_p.iloc[:, 0].astype(str).str.strip()
+                df_sim_p.set_index(df_sim_p.columns[0], inplace=True)
+                
+                mapping_keys = {'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'tvc':'tvc'}
+                
+                for feat, xl_label in mapping_keys.items():
+                    if xl_label in df_sim_p.index:
+                        st.session_state.active_pulldown_form[feat] = float(df_sim_p.loc[xl_label, 'avg'])
+                
+                st.session_state.last_uploaded_sim_file = sim_pulldown_file
+                st.toast("🟢 Telemetry values successfully pulled from spreadsheet!", icon="📊")
+            except Exception as e:
+                st.error(f"Error parsing local test profile: {str(e)}")
+
+        # Clear active layout state memory cache if file is removed
+        if not sim_pulldown_file and st.session_state.last_uploaded_sim_file is not None:
+            st.session_state.active_pulldown_form = {feat: 0.0 for feat in tc_features}
+            st.session_state.last_uploaded_sim_file = None
+
+        # Display the grid layout cells. 
+        # They will display 0.0 by default, auto-populate if a file is uploaded, and remain fully editable.
         u_cols = st.columns(9)
         new_pulldown_input = []
         
-        # Clean dictionary mapping for default values
-        default_defaults = {
-            'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 
-            'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 
-            'tc-2': 1.6,   'tc-3': 0.5,   'tvc': 8.1
-        }
-        
-        # Single loop, clean rendering, and unique non-clashing widget keys
         for i, feat in enumerate(tc_features):
-            default_val = default_defaults.get(feat, 0.0)
-            val = u_cols[i].number_input(f"{feat}:", value=default_val, key=f"automated_sim_input_{feat}")
+            current_stored_val = st.session_state.active_pulldown_form.get(feat, 0.0)
+            
+            # Using value=current_stored_val keeps the field linked dynamically to the file extraction or user adjustments
+            val = u_cols[i].number_input(
+                f"{feat}:", 
+                value=current_stored_val, 
+                key=f"automated_sim_input_{feat}"
+            )
+            # Record final value (whether custom edited or auto-extracted) to pass into interpolation engine
             new_pulldown_input.append(val)
             
         st.markdown("---")
@@ -146,7 +184,6 @@ with tab1:
                     for key_title, df_res in simulation_outputs.items():
                         st.markdown(f"### 📊 Predictions for {key_title}")
                         st.dataframe(df_res, use_container_width=True, hide_index=True)
-
 # ================= TAB 2: DATA REPOSITORY ROOM =================
 with tab2:
     st.subheader(f"Onboard Lab Reports for [{selected_volume}]")

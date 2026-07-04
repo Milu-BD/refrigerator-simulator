@@ -100,22 +100,26 @@ def verify_db_structure(vol, arr_name, p_amb, c_amb):
         st.session_state.db[vol][arr_name][p_amb][c_amb] = []
 
 # ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
+# 1. 📁 Volume Profile Manager Header & Active Model Dropdown
 st.sidebar.header("📁 Volume Profile Manager")
 existing_volumes = list(st.session_state.db.keys()) or ["365L"]
 selected_volume = st.sidebar.selectbox("Active Refrigerator Model:", existing_volumes)
 
-# --- Dynamic Arrangements Section ---
 st.sidebar.markdown("---")
+
+# 2. ➕ Register New Volume Model Form
+new_vol = st.sidebar.text_input("➕ Register New Volume Model:")
+if st.sidebar.button("Add Volume Segment"):
+    if new_vol and new_vol not in st.session_state.db:
+        st.session_state.db[new_vol] = {"Default_Arrangement": {}}
+        save_memory(st.session_state.db)
+        st.success(f"Model {new_vol} registered.")
+        st.rerun()
+
+st.sidebar.markdown("---")
+
+# 3. ➕ Create New Arrangement Inputs
 st.sidebar.subheader("📐 Design Arrangements")
-
-# Extract arrangement list for current volume safely
-if selected_volume in st.session_state.db and isinstance(st.session_state.db[selected_volume], dict):
-    existing_arrangements = list(st.session_state.db[selected_volume].keys()) or ["Default_Arrangement"]
-else:
-    existing_arrangements = ["Default_Arrangement"]
-
-selected_arrangement = st.sidebar.selectbox("Active Arrangement:", existing_arrangements)
-
 new_arr = st.sidebar.text_input("➕ Create New Arrangement:", placeholder="e.g., Capillary_V2_Chiller_Modified")
 if st.sidebar.button("Register Arrangement"):
     if new_arr:
@@ -127,17 +131,13 @@ if st.sidebar.button("Register Arrangement"):
             st.sidebar.success(f"Arrangement '{new_arr}' registered!")
             st.rerun()
 
-st.sidebar.markdown("---")
-new_vol = st.sidebar.text_input("➕ Register New Volume Model:")
-if st.sidebar.button("Add Volume Segment"):
-    if new_vol and new_vol not in st.session_state.db:
-        st.session_state.db[new_vol] = {"Default_Arrangement": {}}
-        save_memory(st.session_state.db)
-        st.success(f"Model {new_vol} registered.")
-        st.rerun()
+# 4. Ambient Arrangement Dropdown
+if selected_volume in st.session_state.db and isinstance(st.session_state.db[selected_volume], dict):
+    existing_arrangements = list(st.session_state.db[selected_volume].keys()) or ["Default_Arrangement"]
+else:
+    existing_arrangements = ["Default_Arrangement"]
 
-
-tab1, tab2, tab3 = st.tabs(["🎛️ Run Automated Simulator", "🛠️ Data Repository Room", "🔍 Reviewer Dashboard"])
+selected_arrangement = st.sidebar.selectbox("Ambient Arrangement:", existing_arrangements)
 
 # ================= TAB 1: RUN AUTOMATED SIMULATOR =================
 with tab1:

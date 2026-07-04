@@ -113,7 +113,21 @@ with tab1:
         u_cols = st.columns(9)
         new_pulldown_input = []
         for i, feat in enumerate(tc_features):
-            default_val = -24.4 if feat=='tf-1' else (-21.8 if feat=='tf-2' else (-22.8 if feat=='tf-3' else (-26.2 if feat=='tf-4' else (-26.4 if feat=='tf-5' else (1.9 if feat=='tc-1' else (1.6 if feat=='tc-2' else (0.5 if feat=='tc-3' else 8.1))))))))
+            st.markdown("#### Step 1: Input Current Pulldown Telemetry Vector")
+        u_cols = st.columns(9)
+        new_pulldown_input = []
+        
+        # Clean dictionary mapping for default values
+        default_defaults = {
+            'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 
+            'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 
+            'tc-2': 1.6,   'tc-3': 0.5,   'tvc': 8.1
+        }
+        
+        for i, feat in enumerate(tc_features):
+            default_val = default_defaults.get(feat, 0.0)
+            val = u_cols[i].number_input(f"{feat}:", value=default_val, key=f"auto_run_{feat}")
+            new_pulldown_input.append(val)
             val = u_cols[i].number_input(f"{feat}:", value=default_val, key=f"auto_run_{feat}")
             new_pulldown_input.append(val)
             

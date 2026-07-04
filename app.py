@@ -26,7 +26,7 @@ if 'db' not in st.session_state:
 if 'reviewer_logged_in' not in st.session_state:
     st.session_state.reviewer_logged_in = False
 
-tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', 'tvc']
+tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', 'tvc', 'S2']
 metric_types = ['mean', 'min', 'max', '(max+min)/2']
 
 # --- ADVANCED INTERPOLATION ENGINE ---
@@ -111,19 +111,16 @@ with tab1:
     else:
         st.markdown("#### Step 1: Input Current Pulldown Telemetry Vector")
         
-        # Local file uploader specifically for the running workspace simulation
         sim_pulldown_file = st.file_uploader(
             "Optional: Upload a Pulldown Excel Report to auto-fill telemetry cells (.xlsx)", 
             type=["xlsx"], 
             key="sim_tab_pulldown_uploader"
         )
         
-        # Initialize internal session states for holding the active user vector values if not present
         if 'active_pulldown_form' not in st.session_state:
             st.session_state.active_pulldown_form = {feat: 0.0 for feat in tc_features}
             st.session_state.last_uploaded_sim_file = None
 
-        # If a file is uploaded and it hasn't been processed yet, parse and update the session state
         if sim_pulldown_file and sim_pulldown_file != st.session_state.last_uploaded_sim_file:
             try:
                 df_sim_p = pd.read_excel(sim_pulldown_file, sheet_name='Summary', header=1)
@@ -131,7 +128,11 @@ with tab1:
                 df_sim_p.iloc[:, 0] = df_sim_p.iloc[:, 0].astype(str).str.strip()
                 df_sim_p.set_index(df_sim_p.columns[0], inplace=True)
                 
-                mapping_keys = {'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'tvc':'tvc'}
+                # Included S2 mapping parameter row connection
+                mapping_keys = {
+                    'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
+                    'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'tvc':'tvc', 'S2':'S2'
+                }
                 
                 for feat, xl_label in mapping_keys.items():
                     if xl_label in df_sim_p.index:
@@ -142,26 +143,30 @@ with tab1:
             except Exception as e:
                 st.error(f"Error parsing local test profile: {str(e)}")
 
-        # Clear active layout state memory cache if file is removed
         if not sim_pulldown_file and st.session_state.last_uploaded_sim_file is not None:
             st.session_state.active_pulldown_form = {feat: 0.0 for feat in tc_features}
             st.session_state.last_uploaded_sim_file = None
 
-        # Display the grid layout cells. 
-        # They will display 0.0 by default, auto-populate if a file is uploaded, and remain fully editable.
-        u_cols = st.columns(9)
+        # Split horizontally across 10 dynamic grid columns now
+        u_cols = st.columns(10)
         new_pulldown_input = []
+        
+        default_defaults = {
+            'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 
+            'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 
+            'tc-2': 1.6,   'tc-3': 0.5,   'tvc': 8.1, 'S2': 41.1
+        }
         
         for i, feat in enumerate(tc_features):
             current_stored_val = st.session_state.active_pulldown_form.get(feat, 0.0)
-            
-            # Using value=current_stored_val keeps the field linked dynamically to the file extraction or user adjustments
+            if current_stored_val == 0.0:
+                current_stored_val = default_defaults.get(feat, 0.0)
+                
             val = u_cols[i].number_input(
                 f"{feat}:", 
                 value=current_stored_val, 
                 key=f"automated_sim_input_{feat}"
             )
-            # Record final value (whether custom edited or auto-extracted) to pass into interpolation engine
             new_pulldown_input.append(val)
             
         st.markdown("---")
@@ -185,97 +190,76 @@ with tab1:
                         st.markdown(f"### 📊 Predictions for {key_title}")
                         st.dataframe(df_res, use_container_width=True, hide_index=True)
 # ================= TAB 2: DATA REPOSITORY ROOM =================
-with tab2:
-    st.subheader(f"Onboard Lab Reports for [{selected_volume}]")
-    st.info("ℹ️ Note: The simulator will store a rolling profile history of only the **last 5 data blocks** uploaded.")
+# Replace the file-processing logic inside your Tab 2 button with this:
+try:
+    # 1. PARSE PULLDOWN
+    df_p_sum = pd.read_excel(pulldown_file, sheet_name='Summary', header=1)
+    df_p_sum.columns = [str(c).strip() for c in df_p_sum.columns]
+    df_p_sum.iloc[:, 0] = df_p_sum.iloc[:, 0].astype(str).str.strip()
+    df_p_sum.set_index(df_p_sum.columns[0], inplace=True)
+    df_p_sum.index.name = 'Metric'
     
-    col_f1, col_f2 = st.columns(2)
-    with col_f1:
-        pulldown_file = st.file_uploader("Upload Pulldown Excel Report File (.xlsx)", type=["xlsx"], key="repo_p")
-    with col_f2:
-        cpt_file = st.file_uploader("Upload CPT Reference Excel File (.xlsx)", type=["xlsx"], key="repo_cpt")
+    # S2 explicitly included in extraction keys matrix
+    mapping_keys = {
+        'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
+        'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'tvc':'tvc', 'S2':'S2'
+    }
+    p_extracted = {f: float(df_p_sum.loc[xl, 'avg']) if xl in df_p_sum.index else 0.0 for f, xl in mapping_keys.items()}
+    
+    # Falling calculation strategy logic loop for sensor selection
+    if 'Sensor' in df_p_sum.index and pd.notna(df_p_sum.loc['Sensor', 'avg']):
+        resolved_sensor = float(df_p_sum.loc['Sensor', 'avg'])
+    elif 'Eva Out100' in df_p_sum.index and 'Eva Out' in df_p_sum.index:
+        resolved_sensor = (float(df_p_sum.loc['Eva Out100', 'avg']) + float(df_p_sum.loc['Eva Out', 'avg'])) / 2.0
+    elif 'Eva Out' in df_p_sum.index:
+        resolved_sensor = float(df_p_sum.loc['Eva Out', 'avg'])
+    else:
+        resolved_sensor = 0.0
+    
+    # 2. PARSE CPT DATA SHEETS
+    df_cpt = pd.read_excel(cpt_file, sheet_name='Report', skiprows=8)
+    df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
+    
+    cpt_structured = {}
+    current_flag = "Unknown"
+    
+    for _, r in df_cpt.iterrows():
+        val_f1 = str(r.iloc[1]).strip()
+        val_crit = str(r.iloc[2]).strip().lower()
         
-    # Visual cues for uploaded status checking
-    st.markdown("---")
-    st.markdown("#### 🔍 Repository File Upload Verification Status")
-    vs1, vs2 = st.columns(2)
-    vs1.markdown(f"**Pulldown Uploaded:** {'🟢 File Ready' if pulldown_file else '🔴 Missing File Input'}")
-    vs2.markdown(f"**CPT Uploaded:** {'🟢 File Ready' if cpt_file else '🔴 Missing File Input'}")
-    
-    if pulldown_file and cpt_file:
-        if st.button("💾 Process and Save Report Pair to Memory Buffer"):
-            try:
-               # 1. PARSE PULLDOWN
-                # header=1 tells pandas to use the row containing 'avg', 'min', 'max' as the column headers
-                df_p_sum = pd.read_excel(pulldown_file, sheet_name='Summary', header=1)
-                
-                # Clean column headers and index strings from any accidental spaces
-                df_p_sum.columns = [str(c).strip() for c in df_p_sum.columns]
-                df_p_sum.iloc[:, 0] = df_p_sum.iloc[:, 0].astype(str).str.strip()
-                df_p_sum.set_index(df_p_sum.columns[0], inplace=True)
-                
-                # We rename the index header cleanly to ensure 'Sensor' can be matched matching your file structure
-                df_p_sum.index.name = 'Metric'
-                
-                mapping_keys = {'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'tvc':'tvc'}
-                
-                # Now looking up 'avg' will work perfectly because 'avg' is now a recognized column header!
-                p_extracted = {f: float(df_p_sum.loc[xl, 'avg']) if xl in df_p_sum.index else 0.0 for f, xl in mapping_keys.items()}
-                
-                # Falling calculation strategy logic loop for the baseline sensor mapping
-                if 'Sensor' in df_p_sum.index and pd.notna(df_p_sum.loc['Sensor', 'avg']):
-                    resolved_sensor = float(df_p_sum.loc['Sensor', 'avg'])
-                elif 'Eva Out100' in df_p_sum.index and 'Eva Out' in df_p_sum.index:
-                    resolved_sensor = (float(df_p_sum.loc['Eva Out100', 'avg']) + float(df_p_sum.loc['Eva Out', 'avg'])) / 2.0
-                elif 'Eva Out' in df_p_sum.index:
-                    resolved_sensor = float(df_p_sum.loc['Eva Out', 'avg'])
-                else:
-                    resolved_sensor = 0.0
-                # 2. PARSE CPT DATA SHEETS
-                df_cpt = pd.read_excel(cpt_file, sheet_name='Report', skiprows=8)
-                df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
-                
-                cpt_structured = {}
-                current_flag = "Unknown"
-                
-                for _, r in df_cpt.iterrows():
-                    val_f1 = str(r.iloc[1]).strip()
-                    val_crit = str(r.iloc[2]).strip().lower()
-                    
-                    if val_f1 and val_f1 != 'nan' and val_f1 != current_flag:
-                        current_flag = val_f1
-                        
-                    if current_flag not in cpt_structured:
-                        cpt_structured[current_flag] = {}
-                        
-                    if val_crit in metric_types:
-                        cpt_structured[current_flag][val_crit] = {
-                            "tf-1": float(r.iloc[3]), "tf-2": float(r.iloc[4]), "tf-3": float(r.iloc[5]),
-                            "tf-4": float(r.iloc[6]), "tf-5": float(r.iloc[7]), "tc-1": float(r.iloc[9]),
-                            "tc-2": float(r.iloc[10]), "tc-3": float(r.iloc[11]), "tvc": float(r.iloc[13]),
-                            "S2": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0,
-                            "Sensor": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0
-                        }
+        if val_f1 and val_f1 != 'nan' and val_f1 != current_flag:
+            current_flag = val_f1
+            
+        if current_flag not in cpt_structured:
+            cpt_structured[current_flag] = {}
+            
+        if val_crit in metric_types:
+            cpt_structured[current_flag][val_crit] = {
+                "tf-1": float(r.iloc[3]), "tf-2": float(r.iloc[4]), "tf-3": float(r.iloc[5]),
+                "tf-4": float(r.iloc[6]), "tf-5": float(r.iloc[7]), "tc-1": float(r.iloc[9]),
+                "tc-2": float(r.iloc[10]), "tc-3": float(r.iloc[11]), "tvc": float(r.iloc[13]),
+                "S2": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0,
+                "Sensor": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0
+            }
 
-                new_block = {
-                    "pulldown_data": p_extracted,
-                    "pulldown_baseline_sensor": resolved_sensor,
-                    "cpt_data": cpt_structured
-                }
-                
-                # Append and force a clean rolling limit of the last 5 datasets
-                if selected_volume not in st.session_state.db or isinstance(st.session_state.db[selected_volume], dict):
-                    st.session_state.db[selected_volume] = []
-                    
-                st.session_state.db[selected_volume].append(new_block)
-                st.session_state.db[selected_volume] = st.session_state.db[selected_volume][-5:]
-                
-                save_memory(st.session_state.db)
-                st.success(f"📦 Pair saved! Core memory contains {len(st.session_state.db[selected_volume])}/5 active profile slots.")
-                st.rerun()
-                
-            except Exception as e:
-                st.error(f"Error compiling automation metrics layout: {str(e)}")
+    new_block = {
+        "pulldown_data": p_extracted,
+        "pulldown_baseline_sensor": resolved_sensor,
+        "cpt_data": cpt_structured
+    }
+    
+    if selected_volume not in st.session_state.db or isinstance(st.session_state.db[selected_volume], dict):
+        st.session_state.db[selected_volume] = []
+        
+    st.session_state.db[selected_volume].append(new_block)
+    st.session_state.db[selected_volume] = st.session_state.db[selected_volume][-5:]
+    
+    save_memory(st.session_state.db)
+    st.success(f"📦 Pair saved! Core memory contains {len(st.session_state.db[selected_volume])}/5 active profile slots with S2 tracking active.")
+    st.rerun()
+    
+except Exception as e:
+    st.error(f"Error compiling automation metrics layout: {str(e)}")
 
 # ================= TAB 3: REVIEWER DASHBOARD =================
 with tab3:

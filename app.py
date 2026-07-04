@@ -300,7 +300,7 @@ with tab3:
     else:
         col_header, col_lock = st.columns([4, 1])
         with col_header:
-            st.markdown(f"### 🛠️ Dedicated Data Editor: **{selected_volume}** ({selected_ambient})")
+            st.markdown(f"### 🛠️ Data Editor for Profile: **{selected_volume}** ({selected_ambient})")
         with col_lock:
             if st.button("Close Secure Lock", type="secondary", use_container_width=True, key=f"close_lock_btn_{selected_volume}_{ambient_key}"):
                 st.session_state.reviewer_logged_in = False
@@ -313,72 +313,81 @@ with tab3:
         if not records_list:
             st.info(f"No paired records found to manipulate for {selected_volume} under the {selected_ambient} ambient.")
         else:
-            st.markdown("#### 📐 Combined Data Matrix (Pulldown & Respected CPT Targets)")
-            st.caption("Each row represents one independent 2-file pair simulation profile. Double-click cells to edit. Select a row and hit 'Delete' on your keyboard to clear that entire dataset from memory entirely.")
+            # --- PART A: PULldown TELEMETRY VECTORS ---
+            st.markdown("#### 📐 Part A: Manipulate Pulldown Telemetry Base Vectors")
+            st.caption("Double-click any cell to edit numbers directly.")
             
-            flattened_rows = []
+            pulldown_rows = []
             for idx, r in enumerate(records_list):
-                row_dict = {"Slot ID": idx}
+                row_dict = {"Record ID": idx}
+                row_dict.update(r.get("pulldown_data", {}))
+                row_dict["Baseline Sensor"] = r.get("pulldown_baseline_sensor", 0.0)
+                pulldown_rows.append(row_dict)
                 
-                p_data = r.get("pulldown_data", {})
-                for f in tc_features:
-                    row_dict[f"Pulldown_{f}"] = p_data.get(f, 0.0)
-                row_dict["Pulldown_Baseline_Sensor"] = r.get("pulldown_baseline_sensor", 0.0)
-                
-                cpt_data = r.get("cpt_data", {})
-                first_flag = list(cpt_data.keys())[0] if cpt_data.keys() else "Unknown_Flag"
-                row_dict["CPT_Linked_Flag"] = first_flag
-                
-                mean_cpt = cpt_data.get(first_flag, {}).get("mean", {})
-                for f in tc_features:
-                    row_dict[f"CPT_Mean_{f}"] = mean_cpt.get(f, 0.0)
-                row_dict["CPT_Mean_Sensor"] = mean_cpt.get("Sensor", 0.0)
-                
-                flattened_rows.append(row_dict)
-                
-            df_master_edit = pd.DataFrame(flattened_rows)
+            df_pulldown_edit = pd.DataFrame(pulldown_rows)
             
-            edited_master_df = st.data_editor(
-                df_master_edit, 
+            edited_pulldown_df = st.data_editor(
+                df_pulldown_edit, 
                 hide_index=True, 
-                num_rows="dynamic", 
                 use_container_width=True,
-                key=f"master_editor_{selected_volume}_{ambient_key}"
+                key=f"editor_p_{selected_volume}_{ambient_key}"
             )
             
+            # --- PART B: STRUCTURAL CPT TARGET MAPS ---
+            st.markdown("#### 📊 Part B: View/Verify Structural CPT Target Maps")
+            st.caption("Reviewing parsed multi-level CPT matrices linked to your uploaded records.")
+            
+            cpt_tabs = st.tabs([f"Record Entry #{i}" for i in range(len(records_list))])
+            for idx, c_tab in enumerate(cpt_tabs):
+                with c_tab:
+                    raw_cpt = records_list[idx].get("cpt_data", {})
+                    cpt_rows = []
+                    for flag, modes in raw_cpt.items():
+                        for mode, metrics in modes.items():
+                            meta = {"TestFlag": flag, "Criteria": mode}
+                            meta.update(metrics)
+                            cpt_rows.append(meta)
+                    if cpt_rows:
+                        st.dataframe(pd.DataFrame(cpt_rows), hide_index=True, use_container_width=True)
+                    else:
+                        st.write("No CPT sub-matrix linked.")
+
+            # --- DATA DELETION & SAVING CONTROLS ---
             st.markdown("---")
-            if st.button("💾 Commit Manipulated Changes permanently to Disk", type="primary", key=f"commit_changes_btn_{selected_volume}_{ambient_key}"):
-                try:
-                    remaining_slots = edited_master_df["Slot ID"].tolist() if "Slot ID" in edited_master_df.columns else []
-                    
-                    updated_records = []
-                    for current_slot in remaining_slots:
-                        if current_slot < len(records_list):
-                            orig_block = records_list[current_slot]
-                            ui_row = edited_master_df[edited_master_df["Slot ID"] == current_slot].iloc[0]
-                            
-                            updated_p_data = {f: float(ui_row.get(f"Pulldown_{f}", 0.0)) for f in tc_features}
-                            orig_block["pulldown_data"] = updated_p_data
-                            orig_block["pulldown_baseline_sensor"] = float(ui_row.get("Pulldown_Baseline_Sensor", 0.0))
-                            
-                            flag_key = str(ui_row.get("CPT_Linked_Flag", "Unknown_Flag"))
-                            updated_cpt_metrics = {f: float(ui_row.get(f"CPT_Mean_{f}", 0.0)) for f in tc_features}
-                            updated_sensor_val = float(ui_row.get("CPT_Mean_Sensor", 0.0))
-                            
-                            orig_block["cpt_data"] = {
-                                flag_key: {
-                                    metric: {
-                                        **updated_cpt_metrics,
-                                        "Sensor": updated_sensor_val
-                                    } for metric in metric_types
-                                }
-                            }
-                            
-                            updated_records.append(orig_block)
-                    
-                    st.session_state.db[selected_volume][ambient_key] = updated_records
+            st.markdown("#### ⚙️ Database Modification Panel")
+            
+            del_col, save_col = st.columns([2, 3])
+            
+            with del_col:
+                record_to_delete = st.selectbox(
+                    "❌ Delete Record ID instance:", 
+                    options=list(range(len(records_list))),
+                    format_func=lambda x: f"Record Entry #{x}",
+                    key=f"del_sel_{selected_volume}_{ambient_key}"
+                )
+                if st.button("🗑️ Drop Selected Record Pair", type="secondary", use_container_width=True, key=f"del_btn_{selected_volume}_{ambient_key}"):
+                    # Remove the specific pair entirely
+                    records_list.pop(record_to_delete)
+                    st.session_state.db[selected_volume][ambient_key] = records_list
                     save_memory(st.session_state.db)
-                    st.success("🎉 Combined dataset memory maps updated successfully!")
+                    st.toast(f"Dropped Entry #{record_to_delete} from transient state.", icon="🗑️")
                     st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to synchronize combined database adjustments: {str(e)}")
+                    
+            with save_col:
+                st.write("\n") # spacing alignment
+                st.write("\n")
+                if st.button("💾 Commit Manipulated Changes permanently to Disk", type="primary", use_container_width=True, key=f"commit_btn_{selected_volume}_{ambient_key}"):
+                    try:
+                        # Map edited data editor values back into the JSON structure frame
+                        for index, row in edited_pulldown_df.iterrows():
+                            if index < len(records_list):
+                                updated_p_data = {f: float(row.get(f, 0.0)) for f in tc_features}
+                                records_list[index]["pulldown_data"] = updated_p_data
+                                records_list[index]["pulldown_baseline_sensor"] = float(row.get("Baseline Sensor", 0.0))
+                        
+                        st.session_state.db[selected_volume][ambient_key] = records_list
+                        save_memory(st.session_state.db)
+                        st.success("🎉 Changes successfully synchronized back to simulator memory!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error preserving metrics layout state: {str(e)}")

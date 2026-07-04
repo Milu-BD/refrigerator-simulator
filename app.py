@@ -84,12 +84,14 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
             
     return results_map
 
-# Helper initialization to safeguard nested memory mapping profiles
+# Helper initialization to safeguard nested memory mapping profiles with type migration
 def verify_db_structure(vol, p_amb, c_amb):
     if vol not in st.session_state.db or not isinstance(st.session_state.db[vol], dict):
         st.session_state.db[vol] = {}
-    if p_amb not in st.session_state.db[vol]:
+        
+    if p_amb not in st.session_state.db[vol] or not isinstance(st.session_state.db[vol][p_amb], dict):
         st.session_state.db[vol][p_amb] = {}
+        
     if c_amb not in st.session_state.db[vol][p_amb]:
         st.session_state.db[vol][p_amb][c_amb] = []
 

@@ -285,15 +285,102 @@ with tab2:
 
 # ================= TAB 3: REVIEWER DASHBOARD =================
 with tab3:
-    st.subheader("🔒 Repository Memory Inspection")
+    st.subheader("🔒 Repository Memory Inspection & Manipulation")
+    
     if not st.session_state.reviewer_logged_in:
-        pwd = st.text_input("Enter Reviewer Code Key:", type="password")
-        if st.button("Unlock Database"):
+        pwd = st.text_input("Enter Reviewer Code Key:", type="password", key="reviewer_pwd_input")
+        if st.button("Unlock Database", key="reviewer_unlock_btn"):
             if pwd == REVIEWER_PASSWORD:
                 st.session_state.reviewer_logged_in = True
                 st.rerun()
     else:
-        if st.button("Close Secure Lock"):
-            st.session_state.reviewer_logged_in = False
-            st.rerun()
-        st.json(st.session_state.db.get(selected_volume, {}))
+        col_header, col_lock = st.columns([4, 1])
+        with col_header:
+            st.markdown(f"### 🛠️ Data Editor for Profile: **{selected_volume}** ({selected_ambient})")
+        with col_lock:
+            if st.button("Close Secure Lock", type="secondary", use_container_width=True):
+                st.session_state.reviewer_logged_in = False
+                st.rerun()
+                
+        # Safely fetch the current active array of records
+        if selected_volume not in st.session_state.db:
+            st.session_state.db[selected_volume] = {"32C": [], "43C": []}
+        records_list = st.session_state.db[selected_volume].get(ambient_key, [])
+        
+        if not records_list:
+            st.info(f"No records found to manipulate for {selected_volume} under the {selected_ambient} ambient.")
+        else:
+            st.markdown("#### 📐 Part A: Manipulate Pulldown Telemetry Base Vectors")
+            st.caption("Double-click any cell to edit numbers directly. Select a row and hit 'Delete' on your keyboard to remove a dataset record.")
+            
+            # Flatten the pulldown list into a structured DataFrame for editing
+            pulldown_rows = []
+            for idx, r in enumerate(records_list):
+                row_dict = {"Record ID": idx}
+                row_dict.update(r.get("pulldown_data", {}))
+                row_dict["Baseline Sensor"] = r.get("pulldown_baseline_sensor", 0.0)
+                pulldown_rows.append(row_dict)
+                
+            df_pulldown_edit = pd.DataFrame(pulldown_rows)
+            
+            # Render the interactive editor for Pulldown Data
+            edited_pulldown_df = st.data_editor(
+                df_pulldown_edit, 
+                hide_index=True, 
+                num_rows="dynamic", # Allows row deletion
+                use_container_width=True,
+                key=f"editor_p_{selected_volume}_{ambient_key}"
+            )
+            
+            st.markdown("#### 📊 Part B: View/Verify Structural CPT Target Maps")
+            st.caption("Reviewing parsed CPT step matrices linked to your records.")
+            
+            # Render CPT view profiles as sub-tabs so it doesn't clutter the space
+            cpt_tabs = st.tabs([f"Record Entry #{i}" for i in range(len(records_list))])
+            for idx, c_tab in enumerate(cpt_tabs):
+                with c_tab:
+                    raw_cpt = records_list[idx].get("cpt_data", {})
+                    # Reconstruct readable layout for inspection
+                    cpt_rows = []
+                    for flag, modes in raw_cpt.items():
+                        for mode, metrics in modes.items():
+                            meta = {"TestFlag": flag, "Criteria": mode}
+                            meta.update(metrics)
+                            cpt_rows.append(meta)
+                    if cpt_rows:
+                        st.dataframe(pd.DataFrame(cpt_rows), hide_index=True, use_container_width=True)
+                    else:
+                        st.write("No CPT sub-matrix linked to this index slot.")
+            
+            # --- DATABASE RE-COMMIT SAVE ENGINE ---
+            st.markdown("---")
+            if st.button("💾 Commit Manipulated Changes permanently to Disk", type="primary"):
+                try:
+                    # 1. Identify rows that were deleted by checking missing indexes
+                    remaining_indices = edited_pulldown_df["Record ID"].tolist() if "Record ID" in edited_pulldown_df.columns else []
+                    
+                    # Rebuild the records buffer matching only kept entries
+                    updated_records = []
+                    for current_idx in remaining_indices:
+                        if current_idx < len(records_list):
+                            # Grab original block reference
+                            orig_block = records_list[current_idx]
+                            
+                            # Grab updated pulldown data row from the UI table
+                            ui_row = edited_pulldown_df[edited_pulldown_df["Record ID"] == current_idx].iloc[0]
+                            
+                            # Pack values back into correct format type
+                            updated_p_data = {f: float(ui_row.get(f, 0.0)) for f in tc_features}
+                            updated_sensor = float(ui_row.get("Baseline Sensor", 0.0))
+                            
+                            orig_block["pulldown_data"] = updated_p_data
+                            orig_block["pulldown_baseline_sensor"] = updated_sensor
+                            updated_records.append(orig_block)
+                    
+                    # 2. Update memory state and write to json
+                    st.session_state.db[selected_volume][ambient_key] = updated_records
+                    save_memory(st.session_state.db)
+                    st.success("🎉 Database successfully updated and re-serialized to `simulator_memory.json`!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to synchronize manual database adjustments: {str(e)}")

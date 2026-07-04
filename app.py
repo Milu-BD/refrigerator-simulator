@@ -139,6 +139,10 @@ else:
 
 selected_arrangement = st.sidebar.selectbox("Ambient Arrangement:", existing_arrangements)
 
+
+# === RESTORED TAB DEFINITIONS ===
+tab1, tab2, tab3 = st.tabs(["🎛️ Run Automated Simulator", "🛠️ Data Repository Room", "🔍 Reviewer Dashboard"])
+
 # ================= TAB 1: RUN AUTOMATED SIMULATOR =================
 with tab1:
     st.subheader(f"Predict Multilevel CPT Matrices for [{selected_volume}] ({selected_arrangement})")

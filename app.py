@@ -32,12 +32,11 @@ metric_types = ['mean', 'min', 'max', '(max+min)/2']
 # --- ADVANCED INTERPOLATION ENGINE ---
 def run_automated_simulation(volume_records, new_pulldown, target_sensors):
     results_map = {}
-    
-    # Run separate predictions for each sensor value input by the user
+    if not volume_records:
+        return results_map
+        
     for idx, target_s in enumerate(target_sensors):
         predicted_modes = []
-        
-        # We model behavior across available historical test flags (Boost Cooling, Level-5, etc.)
         all_flags = set()
         for record in volume_records:
             for flag in record['cpt_data'].keys():
@@ -51,8 +50,7 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
                     if flag not in record['cpt_data'] or metric not in record['cpt_data'][flag]:
                         continue
                     
-                    # Feature vector mapping base criteria
-                    p_base = [record['pulldown_data'][f] for f in tc_features] + [record['pulldown_baseline_sensor']]
+                    p_base = [record['pulldown_data'].get(f, 0.0) for f in tc_features] + [record['pulldown_baseline_sensor']]
                     outputs = record['cpt_data'][flag][metric]
                     y_vector = [outputs.get(f, 0.0) for f in tc_features] + [outputs.get('S2', 0.0), outputs.get('Sensor', 0.0)]
                     
@@ -63,7 +61,6 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
                     knn = KNeighborsRegressor(n_neighbors=min(2, len(X_train)), weights='distance')
                     knn.fit(X_train, y_train)
                     
-                    # Complete user evaluation array
                     query_vector = np.array(new_pulldown + [target_s]).reshape(1, -1)
                     prediction = knn.predict(query_vector)[0]
                     
@@ -92,29 +89,41 @@ selected_volume = st.sidebar.selectbox("Active Refrigerator Volume Model:", exis
 new_vol = st.sidebar.text_input("➕ Register New Volume Model:")
 if st.sidebar.button("Add Volume Segment"):
     if new_vol and new_vol not in st.session_state.db:
-        st.session_state.db[new_vol] = []
+        st.session_state.db[new_vol] = {"32C": [], "43C": []}
         save_memory(st.session_state.db)
         st.success(f"Model {new_vol} registered.")
         st.rerun()
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("🌡️ Universal Ambient Selection")
+selected_ambient = st.sidebar.radio("Select Target Test Ambient conditions:", ["32°C", "43°C"], index=0)
+ambient_key = "32C" if "32" in selected_ambient else "43C"
 
 tab1, tab2, tab3 = st.tabs(["🎛️ Run Automated Simulator", "🛠️ Data Repository Room", "🔍 Reviewer Dashboard"])
 
 # ================= TAB 1: RUN AUTOMATED SIMULATOR =================
 with tab1:
-    st.subheader(f"Predict Multilevel CPT Matrices ({selected_volume})")
-    vol_records = st.session_state.db.get(selected_volume, [])
+    st.subheader(f"Predict Multilevel CPT Matrices ({selected_volume} @ {selected_ambient})")
+    
+    # Safely handle old data shapes or initialize missing layers
+    if selected_volume not in st.session_state.db:
+        st.session_state.db[selected_volume] = {"32C": [], "43C": []}
+    elif isinstance(st.session_state.db[selected_volume], list):
+        # Migrating flat records legacy setup safely to structured ambient profile
+        old_data = st.session_state.db[selected_volume]
+        st.session_state.db[selected_volume] = {"32C": old_data, "43C": []}
+        
+    vol_records = st.session_state.db[selected_volume].get(ambient_key, [])
     
     if not vol_records:
-        st.warning(f"⚠️ No training data has been saved for **[{selected_volume}]** yet. Please visit the Data Repository Room to parse initial reports.")
+        st.warning(f"⚠️ No profile instances saved for **[{selected_volume}]** under **{selected_ambient}** yet. Please upload them in the Data Repository Room.")
     else:
         st.markdown("#### Step 1: Input Current Pulldown Telemetry Vector")
         
         sim_pulldown_file = st.file_uploader(
-            "Optional: Upload a Pulldown Excel Report to auto-fill telemetry cells (.xlsx)", 
+            f"Optional: Auto-fill fields from local {selected_ambient} Pulldown Report (.xlsx)", 
             type=["xlsx"], 
-            key="sim_tab_pulldown_uploader"
+            key=f"sim_tab_p_uploader_{ambient_key}"
         )
         
         if 'active_pulldown_form' not in st.session_state:
@@ -128,7 +137,6 @@ with tab1:
                 df_sim_p.iloc[:, 0] = df_sim_p.iloc[:, 0].astype(str).str.strip()
                 df_sim_p.set_index(df_sim_p.columns[0], inplace=True)
                 
-                # Included S2 mapping parameter row connection
                 mapping_keys = {
                     'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
                     'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'tvc':'tvc', 'S2':'S2'
@@ -147,7 +155,6 @@ with tab1:
             st.session_state.active_pulldown_form = {feat: 0.0 for feat in tc_features}
             st.session_state.last_uploaded_sim_file = None
 
-        # Split horizontally across 10 dynamic grid columns now
         u_cols = st.columns(10)
         new_pulldown_input = []
         
@@ -165,7 +172,7 @@ with tab1:
             val = u_cols[i].number_input(
                 f"{feat}:", 
                 value=current_stored_val, 
-                key=f"automated_sim_input_{feat}"
+                key=f"automated_sim_input_{ambient_key}_{feat}"
             )
             new_pulldown_input.append(val)
             
@@ -176,7 +183,7 @@ with tab1:
         target_sensors = []
         s_cols = st.columns(int(num_targets))
         for idx in range(int(num_targets)):
-            s_val = s_cols[idx].number_input(f"Sensor Query Point {idx+1} (°C):", value=-10.0 + (idx * 2.5), key=f"query_s_{idx}")
+            s_val = s_cols[idx].number_input(f"Sensor Query Point {idx+1} (°C):", value=-10.0 + (idx * 2.5), key=f"query_s_{ambient_key}_{idx}")
             target_sensors.append(s_val)
             
         if st.button("🚀 Generate Predictive CPT Dataset Matrices"):
@@ -189,77 +196,92 @@ with tab1:
                     for key_title, df_res in simulation_outputs.items():
                         st.markdown(f"### 📊 Predictions for {key_title}")
                         st.dataframe(df_res, use_container_width=True, hide_index=True)
-# ================= TAB 2: DATA REPOSITORY ROOM =================
-# Replace the file-processing logic inside your Tab 2 button with this:
-try:
-    # 1. PARSE PULLDOWN
-    df_p_sum = pd.read_excel(pulldown_file, sheet_name='Summary', header=1)
-    df_p_sum.columns = [str(c).strip() for c in df_p_sum.columns]
-    df_p_sum.iloc[:, 0] = df_p_sum.iloc[:, 0].astype(str).str.strip()
-    df_p_sum.set_index(df_p_sum.columns[0], inplace=True)
-    df_p_sum.index.name = 'Metric'
-    
-    # S2 explicitly included in extraction keys matrix
-    mapping_keys = {
-        'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
-        'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'tvc':'tvc', 'S2':'S2'
-    }
-    p_extracted = {f: float(df_p_sum.loc[xl, 'avg']) if xl in df_p_sum.index else 0.0 for f, xl in mapping_keys.items()}
-    
-    # Falling calculation strategy logic loop for sensor selection
-    if 'Sensor' in df_p_sum.index and pd.notna(df_p_sum.loc['Sensor', 'avg']):
-        resolved_sensor = float(df_p_sum.loc['Sensor', 'avg'])
-    elif 'Eva Out100' in df_p_sum.index and 'Eva Out' in df_p_sum.index:
-        resolved_sensor = (float(df_p_sum.loc['Eva Out100', 'avg']) + float(df_p_sum.loc['Eva Out', 'avg'])) / 2.0
-    elif 'Eva Out' in df_p_sum.index:
-        resolved_sensor = float(df_p_sum.loc['Eva Out', 'avg'])
-    else:
-        resolved_sensor = 0.0
-    
-    # 2. PARSE CPT DATA SHEETS
-    df_cpt = pd.read_excel(cpt_file, sheet_name='Report', skiprows=8)
-    df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
-    
-    cpt_structured = {}
-    current_flag = "Unknown"
-    
-    for _, r in df_cpt.iterrows():
-        val_f1 = str(r.iloc[1]).strip()
-        val_crit = str(r.iloc[2]).strip().lower()
-        
-        if val_f1 and val_f1 != 'nan' and val_f1 != current_flag:
-            current_flag = val_f1
-            
-        if current_flag not in cpt_structured:
-            cpt_structured[current_flag] = {}
-            
-        if val_crit in metric_types:
-            cpt_structured[current_flag][val_crit] = {
-                "tf-1": float(r.iloc[3]), "tf-2": float(r.iloc[4]), "tf-3": float(r.iloc[5]),
-                "tf-4": float(r.iloc[6]), "tf-5": float(r.iloc[7]), "tc-1": float(r.iloc[9]),
-                "tc-2": float(r.iloc[10]), "tc-3": float(r.iloc[11]), "tvc": float(r.iloc[13]),
-                "S2": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0,
-                "Sensor": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0
-            }
 
-    new_block = {
-        "pulldown_data": p_extracted,
-        "pulldown_baseline_sensor": resolved_sensor,
-        "cpt_data": cpt_structured
-    }
+# ================= TAB 2: DATA REPOSITORY ROOM =================
+with tab2:
+    st.subheader(f"Onboard Lab Reports for [{selected_volume}] under {selected_ambient}")
+    st.info(f"ℹ️ Note: File targets will commit to the specific **{selected_ambient} Ambient** memory repository block.")
     
-    if selected_volume not in st.session_state.db or isinstance(st.session_state.db[selected_volume], dict):
-        st.session_state.db[selected_volume] = []
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        repo_pulldown_file = st.file_uploader("Upload Pulldown Excel Report File (.xlsx)", type=["xlsx"], key=f"repo_p_file_{ambient_key}")
+    with col_f2:
+        repo_cpt_file = st.file_uploader("Upload CPT Reference Excel File (.xlsx)", type=["xlsx"], key=f"repo_cpt_file_{ambient_key}")
         
-    st.session_state.db[selected_volume].append(new_block)
-    st.session_state.db[selected_volume] = st.session_state.db[selected_volume][-5:]
+    st.markdown("---")
+    st.markdown("#### 🔍 Repository File Upload Verification Status")
+    vs1, vs2 = st.columns(2)
+    vs1.markdown(f"**Pulldown Uploaded:** {'🟢 File Ready' if repo_pulldown_file else '🔴 Missing File Input'}")
+    vs2.markdown(f"**CPT Uploaded:** {'🟢 File Ready' if repo_cpt_file else '🔴 Missing File Input'}")
     
-    save_memory(st.session_state.db)
-    st.success(f"📦 Pair saved! Core memory contains {len(st.session_state.db[selected_volume])}/5 active profile slots with S2 tracking active.")
-    st.rerun()
-    
-except Exception as e:
-    st.error(f"Error compiling automation metrics layout: {str(e)}")
+    if repo_pulldown_file and repo_cpt_file:
+        if st.button("💾 Process and Save Report Pair to Memory Buffer"):
+            try:
+                # FIXED: Corrected precise file binding links
+                df_p_sum = pd.read_excel(repo_pulldown_file, sheet_name='Summary', header=1)
+                df_p_sum.columns = [str(c).strip() for c in df_p_sum.columns]
+                df_p_sum.iloc[:, 0] = df_p_sum.iloc[:, 0].astype(str).str.strip()
+                df_p_sum.set_index(df_p_sum.columns[0], inplace=True)
+                df_p_sum.index.name = 'Metric'
+                
+                mapping_keys = {
+                    'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
+                    'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'tvc':'tvc', 'S2':'S2'
+                }
+                p_extracted = {f: float(df_p_sum.loc[xl, 'avg']) if xl in df_p_sum.index else 0.0 for f, xl in mapping_keys.items()}
+                
+                if 'Sensor' in df_p_sum.index and pd.notna(df_p_sum.loc['Sensor', 'avg']):
+                    resolved_sensor = float(df_p_sum.loc['Sensor', 'avg'])
+                elif 'Eva Out100' in df_p_sum.index and 'Eva Out' in df_p_sum.index:
+                    resolved_sensor = (float(df_p_sum.loc['Eva Out100', 'avg']) + float(df_p_sum.loc['Eva Out', 'avg'])) / 2.0
+                elif 'Eva Out' in df_p_sum.index:
+                    resolved_sensor = float(df_p_sum.loc['Eva Out', 'avg'])
+                else:
+                    resolved_sensor = 0.0
+                
+                df_cpt = pd.read_excel(repo_cpt_file, sheet_name='Report', skiprows=8)
+                df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
+                
+                cpt_structured = {}
+                current_flag = "Unknown"
+                
+                for _, r in df_cpt.iterrows():
+                    val_f1 = str(r.iloc[1]).strip()
+                    val_crit = str(r.iloc[2]).strip().lower()
+                    
+                    if val_f1 and val_f1 != 'nan' and val_f1 != current_flag:
+                        current_flag = val_f1
+                        
+                    if current_flag not in cpt_structured:
+                        cpt_structured[current_flag] = {}
+                        
+                    if val_crit in metric_types:
+                        cpt_structured[current_flag][val_crit] = {
+                            "tf-1": float(r.iloc[3]), "tf-2": float(r.iloc[4]), "tf-3": float(r.iloc[5]),
+                            "tf-4": float(r.iloc[6]), "tf-5": float(r.iloc[7]), "tc-1": float(r.iloc[9]),
+                            "tc-2": float(r.iloc[10]), "tc-3": float(r.iloc[11]), "tvc": float(r.iloc[13]),
+                            "S2": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0,
+                            "Sensor": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0
+                        }
+
+                new_block = {
+                    "pulldown_data": p_extracted,
+                    "pulldown_baseline_sensor": resolved_sensor,
+                    "cpt_data": cpt_structured
+                }
+                
+                if selected_volume not in st.session_state.db or not isinstance(st.session_state.db[selected_volume], dict):
+                    st.session_state.db[selected_volume] = {"32C": [], "43C": []}
+                    
+                st.session_state.db[selected_volume][ambient_key].append(new_block)
+                st.session_state.db[selected_volume][ambient_key] = st.session_state.db[selected_volume][ambient_key][-5:]
+                
+                save_memory(st.session_state.db)
+                st.success(f"📦 Pair saved to {selected_ambient} repository! Buffer contains {len(st.session_state.db[selected_volume][ambient_key])}/5 profile slots.")
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Error compiling automation metrics layout: {str(e)}")
 
 # ================= TAB 3: REVIEWER DASHBOARD =================
 with tab3:
@@ -274,4 +296,4 @@ with tab3:
         if st.button("Close Secure Lock"):
             st.session_state.reviewer_logged_in = False
             st.rerun()
-        st.json(st.session_state.db.get(selected_volume, []))
+        st.json(st.session_state.db.get(selected_volume, {}))

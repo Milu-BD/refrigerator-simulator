@@ -5,259 +5,239 @@ from sklearn.neighbors import KNeighborsRegressor
 import json
 import os
 
-# Page layout configurations
 st.set_page_config(page_title="Refrigerator Simulator Hub", layout="wide")
 
 MEMORY_FILE = "simulator_memory.json"
-REVIEWER_PASSWORD = "Admin@Cooling2026"  # Modify password credentials here if required
+REVIEWER_PASSWORD = "Admin@Cooling2026"
 
-# --- SYSTEM MEMORY MANAGEMENT ---
 def load_memory():
-    """Loads stored training data sets from local JSON storage."""
     if os.path.exists(MEMORY_FILE):
         with open(MEMORY_FILE, "r") as f:
             return json.load(f)
     return {}
 
 def save_memory(data):
-    """Saves training data sets to local JSON storage."""
     with open(MEMORY_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-# Instantiate memory state session tracker
 if 'db' not in st.session_state:
     st.session_state.db = load_memory()
 
 if 'reviewer_logged_in' not in st.session_state:
     st.session_state.reviewer_logged_in = False
 
+# Mapping keys to standardize features across different sheets
 tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', 'tvc']
 metric_types = ['Mean', 'Min', 'Max', '(Max+Min)/2']
 
-# --- CORE INTERPOLATION SIMULATION ENGINE ---
-def run_manual_simulation(volume_records, pulldown_input, target_sensor):
-    """Executes multi-output inverse-distance regression using manual training maps."""
+# --- FILE PARSING ENGINES ---
+def parse_pulldown_file(uploaded_file):
+    """Extracts average validation vectors from files like CPT Report_365L_F-11708_R028442.xlsx"""
+    try:
+        df = pd.read_excel(uploaded_file, sheet_name='Summary')
+        # Standardize structure formatting
+        df.columns = [str(c).strip() for c in df.iloc[0]]
+        df = df.iloc[1:].copy()
+        df.rename(columns={df.columns[0]: 'Feature'}, inplace=True)
+        df['Feature'] = df['Feature'].astype(str).str.strip().str.lower()
+        
+        # Create mapping dictionary from the 'avg' column
+        avg_map = dict(zip(df['Feature'], pd.to_numeric(df['avg'], errors='coerce')))
+        
+        # Align features safely
+        extracted = {
+            'tf-1': avg_map.get('tf1', -25.0),
+            'tf-2': avg_map.get('tf2', -25.0),
+            'tf-3': avg_map.get('tf3', -25.0),
+            'tf-4': avg_map.get('tf4', -25.0),
+            'tf-5': avg_map.get('tf5', -25.0),
+            'tc-1': avg_map.get('tc1', 0.0),
+            'tc-2': avg_map.get('tc2', 0.0),
+            'tc-3': avg_map.get('tc3', 0.0),
+            'tvc': avg_map.get('tvc', 0.0),
+            'Sensor': avg_map.get('sensor', None),
+            'Eva Out': avg_map.get('eva out', None),
+            'Eva Out100': avg_map.get('eva out100', None)
+        }
+        return extracted
+    except Exception as e:
+        st.error(f"Error parsing Pulldown File template format: {e}")
+        return None
+
+def parse_cpt_file(uploaded_file):
+    """Extracts stabilization performance profiles from files like CPT Report_365L_F-11708_R028323.xlsx"""
+    try:
+        df = pd.read_excel(uploaded_file, sheet_name='Report')
+        
+        # Locate performance level data rows securely
+        records = {}
+        current_level = None
+        
+        for idx, row in df.iterrows():
+            val_0 = str(row.iloc[0]).strip()
+            val_1 = str(row.iloc[1]).strip()
+            val_2 = str(row.iloc[2]).strip().lower()
+            
+            if "Level-" in val_1:
+                current_level = val_1
+                records[current_level] = []
+                
+            if current_level and val_2 in ['mean', 'min', 'max', '(max+min)/2']:
+                metric_name = 'Mean' if val_2=='mean' else ('Min' if val_2=='min' else ('Max' if val_2=='max' else '(Max+Min)/2'))
+                
+                # Extract indices from spreadsheet alignment
+                m_data = {
+                    "Metric_Type": metric_name,
+                    "tf-1": pd.to_numeric(row.iloc[3], errors='coerce'),
+                    "tf-2": pd.to_numeric(row.iloc[4], errors='coerce'),
+                    "tf-3": pd.to_numeric(row.iloc[5], errors='coerce'),
+                    "tf-4": pd.to_numeric(row.iloc[6], errors='coerce'),
+                    "tf-5": pd.to_numeric(row.iloc[7], errors='coerce'),
+                    "tc-1": pd.to_numeric(row.iloc[9], errors='coerce'),
+                    "tc-2": pd.to_numeric(row.iloc[10], errors='coerce'),
+                    "tc-3": pd.to_numeric(row.iloc[11], errors='coerce'),
+                    "tvc": pd.to_numeric(row.iloc[13], errors='coerce'), # tvc1 used as primary index baseline
+                    "Sensor": pd.to_numeric(row.iloc[17], errors='coerce')
+                }
+                records[current_level].append(m_data)
+        return records
+    except Exception as e:
+        st.error(f"Error parsing CPT Matrix Report layout: {e}")
+        return None
+
+
+# --- PREDICTION CORE ---
+def run_automated_simulation(cpt_matrix, pulldown_vector, target_sensor):
     simulated_results = []
-    
     for metric in metric_types:
-        X_train = []
-        y_train = []
+        X_train, y_train = [], []
         
-        # Loop through each manually entered training block for this volume
-        for record_id, data in volume_records.items():
-            metric_rows = [r for r in data['outputs'] if r['Metric_Type'] == metric]
-            if not metric_rows:
+        for lvl_name, rows in cpt_matrix.items():
+            matched_row = next((r for r in rows if r['Metric_Type'] == metric), None)
+            if not matched_row or pd.isna(matched_row['Sensor']):
                 continue
+                
+            X_train.append([pulldown_vector[f] for f in tc_features])
+            y_train.append([matched_row[f] for f in tc_features])
             
-            # Locate the output row closest to the user's targeted sensor value
-            sensor_diffs = [abs(r['Sensor'] - target_sensor) for r in metric_rows]
-            closest_idx = np.argmin(sensor_diffs)
-            matched_row = metric_rows[closest_idx]
+        if not X_train:
+            continue
             
-            p_vals = [data['pulldown'][feat] for feat in tc_features]
-            m_vals = [matched_row[feat] for feat in tc_features]
-            
-            X_train.append(p_vals)
-            y_train.append(m_vals)
-            
-        X_train = np.array(X_train)
-        y_train = np.array(y_train)
-        
-        if len(X_train) == 0:
-            return None
-            
-        # Machine learning dynamic curve tracking based on geometric distance
-        knn = KNeighborsRegressor(n_neighbors=min(3, len(X_train)), weights='distance')
+        knn = KNeighborsRegressor(n_neighbors=min(2, len(X_train)), weights='distance')
         knn.fit(X_train, y_train)
         
-        user_vector = np.array(pulldown_input).reshape(1, -1)
+        user_vector = np.array([pulldown_vector[f] for f in tc_features]).reshape(1, -1)
         predicted_values = knn.predict(user_vector)[0]
-        
         simulated_results.append([metric] + list(np.round(predicted_values, 2)))
         
-    return pd.DataFrame(simulated_results, columns=['Metric_Type'] + tc_features)
+    if simulated_results:
+        return pd.DataFrame(simulated_results, columns=['Metric_Type'] + tc_features)
+    return None
 
 
 # --- USER INTERFACE SIDEBAR ---
-st.sidebar.header("📁 Volume Profile Manager")
-existing_volumes = list(st.session_state.db.keys())
-if not existing_volumes:
-    existing_volumes = ["365L"]
+st.sidebar.header("📁 System Volume Profile")
+existing_volumes = list(st.session_state.db.keys()) if st.session_state.db else ["365L"]
+selected_volume = st.sidebar.selectbox("Active Refrigerator Model Volume:", existing_volumes)
 
-selected_volume = st.sidebar.selectbox("Active Refrigerator Volume Model:", existing_volumes)
-
-new_vol = st.sidebar.text_input("➕ Register New Volume Model:")
-if st.sidebar.button("Add Volume Segment"):
-    if new_vol and new_vol not in st.session_state.db:
-        st.session_state.db[new_vol] = {}
-        save_memory(st.session_state.db)
-        st.success(f"Model {new_vol} registered.")
-        st.rerun()
-
-st.sidebar.markdown("---")
-
-# --- THREE-TAB NAVIGATION CONTROL ---
-tab1, tab2, tab3 = st.tabs(["🎛️ Run Simulator", "🛠️ Manual Training Room", "🔍 Reviewer Dashboard"])
+# --- TAB CONTROL ---
+tab1, tab2, tab3 = st.tabs(["🎛️ Run Automated Simulator", "🛠️ Data Repository Room", "🔍 Reviewer Dashboard"])
 
 # ================= TAB 1: RUN SIMULATOR =================
 with tab1:
-    st.subheader(f"Execute Live Multi-Level Predictions ({selected_volume})")
-    vol_records = st.session_state.db.get(selected_volume, {})
+    st.subheader("Simulate Interpolated Performance Levels")
     
-    if not vol_records:
-        st.warning(f"⚠️ No training data has been entered for **[{selected_volume}]** yet. Please head to the 'Manual Training Room' tab to submit reference records first.")
+    vol_data = st.session_state.db.get(selected_volume, {})
+    if "cpt_matrix" not in vol_data:
+        st.warning("⚠️ No active validation dataset repository found. Please head over to 'Data Repository Room' tab to upload spreadsheet profiles first.")
     else:
-        st.markdown("#### Step 1: Input Current Pulldown Data Vector")
-        u_cols = st.columns(9)
-        user_pulldown = []
-        for i, feat in enumerate(tc_features):
-            default_val = -29.2 if feat=='tf-1' else (-27.0 if feat=='tf-2' else (-28.4 if feat=='tf-3' else (-29.8 if feat=='tf-4' else (-30.5 if feat=='tf-5' else (-3.0 if feat=='tc-1' else (-4.1 if feat=='tc-2' else (-5.4 if feat=='tc-3' else 1.4)))))))
-            val = u_cols[i].number_input(f"{feat}:", value=default_val, key=f"sim_run_{feat}")
-            user_pulldown.append(val)
-            
-        st.markdown("---")
-        st.markdown("#### Step 2: Set Target Levels and Values")
-        num_set_levels = st.number_input("Number of Set Levels required:", min_value=1, max_value=10, value=2, step=1)
+        st.markdown("### Step 1: Provide Live Pulldown Validation Source File")
+        pulldown_file = st.file_uploader("Upload Pulldown Data Excel (.xlsx)", type=["xlsx"], key="run_pulldown_upload")
         
-        sensor_levels = []
-        level_cols = st.columns(int(num_set_levels))
-        
-        for i in range(int(num_set_levels), 0, -1):
-            col_idx = int(num_set_levels) - i
-            s_val = level_cols[col_idx].number_input(f"Sensor Value (Level-{i}):", value=-21.5 + (col_idx * 2), key=f"sim_lvl_{i}")
-            sensor_levels.append((f"Level-{i}", s_val))
+        if pulldown_file:
+            pulldown_data = parse_pulldown_file(pulldown_file)
             
-        st.markdown("---")
-        st.markdown("#### 📊 Predicted Level Configurations Result")
-        
-        for lvl_name, sensor_target in sensor_levels:
-            st.markdown(f"##### 📍 Outputs for **{lvl_name}** (Target Sensor Temp: `{sensor_target}°C`)")
-            
-            output_table = run_manual_simulation(vol_records, user_pulldown, sensor_target)
-            
-            if output_table is not None:
-                st.markdown("`Metric_Type` | `tf-1` | `tf-2` | `tf-3` | `tf-4` | `tf-5` | `tc-1` | `tc-2` | `tc-3` | `tvc`")
-                st.dataframe(output_table.style.format(precision=2), use_container_width=True)
-            else:
-                st.error(f"Could not compute matrix for {lvl_name}. Ensure adequate data is saved in training room.")
+            if pulldown_data:
+                st.success("Pulldown data vector parsed successfully.")
+                
+                # Core Option Logic Selection UI
+                st.markdown("### Step 2: Choose Interpolation Logic Route")
+                
+                has_sensor = pulldown_data['Sensor'] is not None and not pd.isna(pulldown_data['Sensor'])
+                
+                options_list = ["Predict CPT by Sensor", "Predict CPT by Eva out"]
+                selected_strategy = st.radio("Available Computation Routes:", options_list, index=0 if has_sensor else 1)
+                
+                computed_target_sensor = None
+                
+                if selected_strategy == "Predict CPT by Sensor":
+                    if has_sensor:
+                        computed_target_sensor = pulldown_data['Sensor']
+                        st.info(f"Using parsed file Sensor baseline target value: `{computed_target_sensor}°C`")
+                    else:
+                        st.error("No valid Sensor metric column discovered inside the uploaded summary file. Please fall back to 'Predict CPT by Eva out' mode below.")
+                
+                if selected_strategy == "Predict CPT by Eva out" or computed_target_sensor is None:
+                    eva_out = pulldown_data.get('Eva Out')
+                    eva_out100 = pulldown_data.get('Eva Out100')
+                    
+                    if eva_out100 is not None and not pd.isna(eva_out100) and eva_out is not None and not pd.isna(eva_out):
+                        computed_target_sensor = (eva_out100 + eva_out) / 2
+                        st.info(f"Target Sensor derived from formula calculation `(Eva Out100 + Eva Out) / 2`: `{computed_target_sensor:.2f}°C`")
+                    elif eva_out is not None and not pd.isna(eva_out):
+                        computed_target_sensor = eva_out
+                        st.info(f"Eva Out100 column missing or corrupted. Fallback single target `Eva Out` captured: `{computed_target_sensor:.2f}°C`")
+                    else:
+                        st.error("Critical calculation error: Both Eva Out and Eva Out100 data values are absent in this file dataset summary.")
+                
+                if computed_target_sensor is not None:
+                    st.markdown("---")
+                    st.markdown(f"#### 📊 Automated Target Prediction Matrix (Evaluated Target: `{computed_target_sensor:.2f}°C`)")
+                    
+                    out_table = run_automated_simulation(vol_data['cpt_matrix'], pulldown_data, computed_target_sensor)
+                    if out_table is not None:
+                        st.markdown("`Metric_Type` | `tf-1` | `tf-2` | `tf-3` | `tf-4` | `tf-5` | `tc-1` | `tc-2` | `tc-3` | `tvc`")
+                        st.dataframe(out_table.style.format(precision=2), use_container_width=True)
+                    else:
+                        st.error("Failed to solve estimation equations. Ensure target matrix limits fall within historical dataset scope bounds.")
 
-# ================= TAB 2: MANUAL TRAINING ROOM =================
+# ================= TAB 2: DATA REPOSITORY ROOM =================
 with tab2:
-    st.subheader(f"Train Dataset Arrays for [{selected_volume}]")
-    num_sets = st.number_input("Number of training blocks to register:", min_value=1, max_value=10, value=1, step=1, key="train_num_sets")
+    st.subheader("Manage Component System Matrices")
     
-    with st.form("manual_training_form"):
-        submitted_data_sets = {}
-        
-        for s in range(int(num_sets)):
-            st.markdown(f"### 📊 Dataset Block #{s+1}")
-            st.markdown("**Pulldown Initialization Values:**")
-            p_cols = st.columns(10)
-            p_data = {}
-            for idx, feat in enumerate(tc_features):
-                p_data[feat] = p_cols[idx].number_input(f"{feat}", value=-25.0, key=f"p_{s}_{feat}")
-            p_data['Sensor'] = p_cols[9].number_input("Sensor", value=-25.0, key=f"p_{s}_sens")
-            
-            st.markdown("---")
-            st.markdown("**Respected Outputs:**")
-            
-            # FIXED: We generate a layout header row exactly below the section title and above the input boxes
-            header_cols = st.columns(11)
-            header_cols[0].markdown("**Metric_Type**")
-            for idx, feat in enumerate(tc_features):
-                header_cols[idx+1].markdown(f"**{feat}**")
-            header_cols[10].markdown("**Sensor**")
-            
-            out_rows = []
-            for metric in metric_types:
-                m_cols = st.columns(11)
-                m_cols[0].markdown(f"**{metric}**")
-                m_data = {"Metric_Type": metric}
-                
-                for idx, feat in enumerate(tc_features):
-                    # label_visibility="collapsed" keeps the form perfectly linear and flat as requested
-                    m_data[feat] = m_cols[idx+1].number_input(f"{feat}", value=0.0, label_visibility="collapsed", key=f"m_{s}_{metric}_{feat}")
-                
-                m_data['Sensor'] = m_cols[10].number_input("Sensor Target", value=0.0, label_visibility="collapsed", key=f"m_{s}_{metric}_sens")
-                out_rows.append(m_data)
-                
-            submitted_data_sets[f"set_{len(st.session_state.db.get(selected_volume, {})) + s}"] = {
-                "pulldown": p_data,
-                "outputs": out_rows
-            }
-            st.markdown("---")
-            
-        if st.form_submit_button("Commit Data Blocks to Memory Banks"):
-            if selected_volume not in st.session_state.db:
-                st.session_state.db[selected_volume] = {}
-            for k, v in submitted_data_sets.items():
-                st.session_state.db[selected_volume][k] = v
-            save_memory(st.session_state.db)
-            st.success(f"Retrained matrix for [{selected_volume}] successfully!")
-            st.rerun()
+    target_vol_model = st.text_input("Active Target Volume Identity Tag:", value=selected_volume)
+    st.markdown("Upload a baseline CPT reference file (like **`CPT Report_365L_F-11708_R028323.xlsx`**) to calibrate model constraints.")
+    
+    cpt_matrix_file = st.file_uploader("Upload CPT Reference Profile Matrix (.xlsx)", type=["xlsx"], key="repository_cpt_upload")
+    
+    if st.button("Publish Profiles to System Memory Banks"):
+        if cpt_matrix_file and target_vol_model:
+            parsed_matrix = parse_cpt_file(cpt_matrix_file)
+            if parsed_matrix:
+                if target_vol_model not in st.session_state.db:
+                    st.session_state.db[target_vol_model] = {}
+                st.session_state.db[target_vol_model]['cpt_matrix'] = parsed_matrix
+                save_memory(st.session_state.db)
+                st.success(f"System metrics for model group [{target_vol_model}] compiled and successfully synchronized online.")
+                st.rerun()
+        else:
+            st.error("Missing configuration actions: Please upload a valid sheet file component first.")
 
 # ================= TAB 3: SECURED REVIEWER DASHBOARD =================
 with tab3:
     st.subheader("🔒 Reviewer Audit Room")
-    
     if not st.session_state.reviewer_logged_in:
-        col_sec1, col_sec2 = st.columns([1, 2])
-        with col_sec1:
-            entered_password = st.text_input("Enter Reviewer Security Key:", type="password")
-            if st.button("Unlock Dashboard Data"):
-                if entered_password == REVIEWER_PASSWORD:
-                    st.session_state.reviewer_logged_in = True
-                    st.success("Access Granted.")
-                    st.rerun()
-                else:
-                    st.error("Incorrect credentials. Access denied.")
+        entered_password = st.text_input("Enter Reviewer Security Key:", type="password")
+        if st.button("Unlock Dashboard Data"):
+            if entered_password == REVIEWER_PASSWORD:
+                st.session_state.reviewer_logged_in = True
+                st.rerun()
+            else:
+                st.error("Incorrect credentials.")
     else:
         if st.button("🔒 Lock & Close Audit View"):
             st.session_state.reviewer_logged_in = False
             st.rerun()
             
-        st.markdown(f"### 📋 Reviewing Dataset Profiles Saved for Model: **[{selected_volume}]**")
-        vol_records = st.session_state.db.get(selected_volume, {})
-        
-        if not vol_records:
-            st.info("No records available to review for this configuration model.")
-        else:
-            pulldown_rows_list = []
-            output_rows_list = []
-            
-            for set_id, content in vol_records.items():
-                p_row = {"Set_ID": set_id}
-                p_row.update(content["pulldown"])
-                pulldown_rows_list.append(p_row)
-                
-                for out_row in content["outputs"]:
-                    o_row = {"Set_ID": set_id}
-                    o_row.update(out_row)
-                    output_rows_list.append(o_row)
-            
-            df_review_pulldown = pd.DataFrame(pulldown_rows_list)
-            df_review_outputs = pd.DataFrame(output_rows_list)
-            
-            st.markdown("#### 🔍 Apply Dynamic Thermocouple Range Filters")
-            fc1, fc2, fc3 = st.columns(3)
-            with fc1:
-                filter_target = st.selectbox("Select Thermocouple to inspect:", tc_features)
-            with fc2:
-                filter_operator = st.selectbox("Logical Operator Condition:", ["Show All Data", "Less than or equal (<=)", "Greater than or equal (>=)"])
-            with fc3:
-                filter_value = st.number_input("Threshold Temperature Value (°C):", value=0.0, step=0.5)
-                
-            if filter_operator != "Show All Data":
-                if filter_operator == "Less than or equal (<=)":
-                    df_review_pulldown = df_review_pulldown[df_review_pulldown[filter_target] <= filter_value]
-                    df_review_outputs = df_review_outputs[df_review_outputs[filter_target] <= filter_value]
-                elif filter_operator == "Greater than or equal (>=)":
-                    df_review_pulldown = df_review_pulldown[df_review_pulldown[filter_target] >= filter_value]
-                    df_review_outputs = df_review_outputs[df_review_outputs[filter_target] >= filter_value]
-            
-            st.markdown("---")
-            st.markdown(f"**Historical Pulldown Baseline Data Matrix ({len(df_review_pulldown)} entries matches):**")
-            st.dataframe(df_review_pulldown.style.format(precision=2), use_container_width=True)
-            
-            st.markdown(f"**Historical Stabilization Segment Data Matrix ({len(df_review_outputs)} cycle rows matches):**")
-            st.dataframe(df_review_outputs.style.format(precision=2), use_container_width=True)
+        st.markdown(f"### Live Database Configuration Profiles: [{selected_volume}]")
+        st.json(st.session_state.db.get(selected_volume, {}))

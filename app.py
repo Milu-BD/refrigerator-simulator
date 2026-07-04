@@ -84,37 +84,65 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
             
     return results_map
 
-# Helper initialization to safeguard nested memory mapping profiles with type migration
-def verify_db_structure(vol, p_amb, c_amb):
+# Helper initialization to safeguard nested multi-arrangement structure
+def verify_db_structure(vol, arr_name, p_amb, c_amb):
     if vol not in st.session_state.db or not isinstance(st.session_state.db[vol], dict):
         st.session_state.db[vol] = {}
+    
+    # Catch old layouts or non-existent arrangements
+    if arr_name not in st.session_state.db[vol] or not isinstance(st.session_state.db[vol][arr_name], dict):
+        st.session_state.db[vol][arr_name] = {}
         
-    if p_amb not in st.session_state.db[vol] or not isinstance(st.session_state.db[vol][p_amb], dict):
-        st.session_state.db[vol][p_amb] = {}
+    if p_amb not in st.session_state.db[vol][arr_name] or not isinstance(st.session_state.db[vol][arr_name][p_amb], dict):
+        st.session_state.db[vol][arr_name][p_amb] = {}
         
-    if c_amb not in st.session_state.db[vol][p_amb]:
-        st.session_state.db[vol][p_amb][c_amb] = []
+    if c_amb not in st.session_state.db[vol][arr_name][p_amb]:
+        st.session_state.db[vol][arr_name][p_amb][c_amb] = []
 
-# --- SIDEBAR REFRIGERATOR MODEL PROFILE MANAGER ---
+# ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
 st.sidebar.header("📁 Volume Profile Manager")
 existing_volumes = list(st.session_state.db.keys()) or ["365L"]
 selected_volume = st.sidebar.selectbox("Active Refrigerator Model:", existing_volumes)
 
+# --- Dynamic Arrangements Section ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("📐 Design Arrangements")
+
+# Extract arrangement list for current volume safely
+if selected_volume in st.session_state.db and isinstance(st.session_state.db[selected_volume], dict):
+    existing_arrangements = list(st.session_state.db[selected_volume].keys()) or ["Default_Arrangement"]
+else:
+    existing_arrangements = ["Default_Arrangement"]
+
+selected_arrangement = st.sidebar.selectbox("Active Arrangement:", existing_arrangements)
+
+new_arr = st.sidebar.text_input("➕ Create New Arrangement:", placeholder="e.g., Capillary_V2_Chiller_Modified")
+if st.sidebar.button("Register Arrangement"):
+    if new_arr:
+        if selected_volume not in st.session_state.db or not isinstance(st.session_state.db[selected_volume], dict):
+            st.session_state.db[selected_volume] = {}
+        if new_arr not in st.session_state.db[selected_volume]:
+            st.session_state.db[selected_volume][new_arr] = {}
+            save_memory(st.session_state.db)
+            st.sidebar.success(f"Arrangement '{new_arr}' registered!")
+            st.rerun()
+
+st.sidebar.markdown("---")
 new_vol = st.sidebar.text_input("➕ Register New Volume Model:")
 if st.sidebar.button("Add Volume Segment"):
     if new_vol and new_vol not in st.session_state.db:
-        st.session_state.db[new_vol] = {}
+        st.session_state.db[new_vol] = {"Default_Arrangement": {}}
         save_memory(st.session_state.db)
         st.success(f"Model {new_vol} registered.")
         st.rerun()
+
 
 tab1, tab2, tab3 = st.tabs(["🎛️ Run Automated Simulator", "🛠️ Data Repository Room", "🔍 Reviewer Dashboard"])
 
 # ================= TAB 1: RUN AUTOMATED SIMULATOR =================
 with tab1:
-    st.subheader(f"Predict Multilevel CPT Matrices for Model [{selected_volume}]")
+    st.subheader(f"Predict Multilevel CPT Matrices for [{selected_volume}] ({selected_arrangement})")
     
-    # Ambient Selection options for Simulation matching your request
     c1, c2 = st.columns(2)
     with c1:
         sim_p_ambient = st.selectbox("Select Target Pulldown Ambient:", ["32°C", "43°C"], key="sim_p_amb")
@@ -124,11 +152,11 @@ with tab1:
     p_key = "32C" if "32" in sim_p_ambient else "43C"
     c_key = "16C" if "16" in sim_c_ambient else ("32C" if "32" in sim_c_ambient else "43C")
     
-    verify_db_structure(selected_volume, p_key, c_key)
-    vol_records = st.session_state.db[selected_volume][p_key][c_key]
+    verify_db_structure(selected_volume, selected_arrangement, p_key, c_key)
+    vol_records = st.session_state.db[selected_volume][selected_arrangement][p_key][c_key]
     
     if not vol_records:
-        st.warning(f"⚠️ No matching profiles found for **Pulldown: {sim_p_ambient}** linked to **CPT: {sim_c_ambient}**. Onboard files first in the Repository Room.")
+        st.warning(f"⚠️ No matching profiles found under arrangement **{selected_arrangement}** for **Pulldown: {sim_p_ambient}** linked to **CPT: {sim_c_ambient}**.")
     else:
         st.markdown("#### Step 1: Input Current Pulldown Telemetry Vector")
         sim_pulldown_file = st.file_uploader(
@@ -157,7 +185,7 @@ with tab1:
                 st.session_state.last_uploaded_sim_file = sim_pulldown_file
                 st.toast("🟢 Parsed values pulled from sheet!", icon="📊")
             except Exception as e:
-                st.error(f"Error parsing local configuration: {str(e)}")
+                st.error(f"Error parsing configuration: {str(e)}")
 
         u_cols = st.columns(10)
         new_pulldown_input = []
@@ -179,7 +207,7 @@ with tab1:
             target_sensors.append(s_val)
             
         if st.button("🚀 Generate Predictive CPT Dataset Matrices", type="primary"):
-            with st.spinner("Interpolating physical mappings..."):
+            with st.spinner("Interpolating variant mappings..."):
                 simulation_outputs = run_automated_simulation(vol_records, new_pulldown_input, target_sensors)
                 if not simulation_outputs:
                     st.error("Simulation engine execution error.")
@@ -190,9 +218,8 @@ with tab1:
 
 # ================= TAB 2: DATA REPOSITORY ROOM =================
 with tab2:
-    st.subheader(f"Onboard Lab Reports for [{selected_volume}]")
+    st.subheader(f"Onboard Lab Reports for [{selected_volume}] ({selected_arrangement})")
     
-    # Dual ambient select choices inside Repository matching requirements
     repo_c1, repo_c2 = st.columns(2)
     with repo_c1:
         repo_p_ambient = st.selectbox("Source Pulldown File Ambient Layer:", ["32°C", "43°C"], key="repo_p_amb")
@@ -246,12 +273,12 @@ with tab2:
 
                 new_block = {"pulldown_data": p_extracted, "pulldown_baseline_sensor": resolved_sensor, "cpt_data": cpt_structured}
                 
-                verify_db_structure(selected_volume, p_repo_key, c_repo_key)
-                st.session_state.db[selected_volume][p_repo_key][c_repo_key].append(new_block)
-                st.session_state.db[selected_volume][p_repo_key][c_repo_key] = st.session_state.db[selected_volume][p_repo_key][c_repo_key][-5:]
+                verify_db_structure(selected_volume, selected_arrangement, p_repo_key, c_repo_key)
+                st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key].append(new_block)
+                st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key] = st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key][-5:]
                 
                 save_memory(st.session_state.db)
-                st.success(f"📦 Paired Set successfully saved into combination storage path!")
+                st.success(f"📦 Paired Set saved into: {selected_volume} → {selected_arrangement}")
                 st.rerun()
             except Exception as e:
                 st.error(f"Compilation error parsing dataset rows: {str(e)}")
@@ -260,7 +287,6 @@ with tab2:
 with tab3:
     st.subheader("🔒 Repository Memory Inspection & Manipulation")
     
-    # Reviewer Workspace Ambient Trackers
     rd_c1, rd_c2 = st.columns(2)
     with rd_c1:
         rev_p_ambient = st.selectbox("Inspect Pulldown Ambient Space:", ["32°C", "43°C"], key="rev_p_amb")
@@ -279,17 +305,18 @@ with tab3:
     else:
         col_header, col_lock = st.columns([4, 1])
         with col_header:
-            st.markdown(f"### 🛠️ Data Editor: **{selected_volume}** (Pulldown: {rev_p_ambient} / CPT: {rev_c_ambient})")
+            st.markdown(f"### 🛠️ Data Editor: **{selected_volume}** | Arrangement: **{selected_arrangement}**")
+            st.caption(f"Currently filtering Pulldown: {rev_p_ambient} / CPT: {rev_c_ambient}")
         with col_lock:
             if st.button("Close Secure Lock", type="secondary", use_container_width=True, key=f"c_lck_{selected_volume}_{p_rev_key}_{c_rev_key}"):
                 st.session_state.reviewer_logged_in = False
                 st.rerun()
                 
-        verify_db_structure(selected_volume, p_rev_key, c_rev_key)
-        records_list = st.session_state.db[selected_volume][p_rev_key][c_rev_key]
+        verify_db_structure(selected_volume, selected_arrangement, p_rev_key, c_rev_key)
+        records_list = st.session_state.db[selected_volume][selected_arrangement][p_rev_key][c_rev_key]
         
         if not records_list:
-            st.info("No paired records matched under this nested target combo selection.")
+            st.info("No paired records matched for this specific arrangement selection.")
         else:
             st.markdown("#### 📐 Part A: Manipulate Pulldown Telemetry Base Vectors")
             pulldown_rows = []
@@ -326,7 +353,7 @@ with tab3:
                 record_to_delete = st.selectbox("❌ Delete Record ID instance:", options=list(range(len(records_list))), format_func=lambda x: f"Record Entry #{x}", key=f"sel_del_{selected_volume}_{p_rev_key}_{c_rev_key}")
                 if st.button("🗑️ Drop Selected Record Pair", type="secondary", use_container_width=True, key=f"b_del_{selected_volume}_{p_rev_key}_{c_rev_key}"):
                     records_list.pop(record_to_delete)
-                    st.session_state.db[selected_volume][p_rev_key][c_rev_key] = records_list
+                    st.session_state.db[selected_volume][selected_arrangement][p_rev_key][c_rev_key] = records_list
                     save_memory(st.session_state.db)
                     st.toast(f"Dropped Entry #{record_to_delete}.", icon="🗑️")
                     st.rerun()
@@ -341,9 +368,9 @@ with tab3:
                                 records_list[index]["pulldown_data"] = updated_p_data
                                 records_list[index]["pulldown_baseline_sensor"] = float(row.get("Baseline Sensor", 0.0))
                         
-                        st.session_state.db[selected_volume][p_rev_key][c_rev_key] = records_list
+                        st.session_state.db[selected_volume][selected_arrangement][p_rev_key][c_rev_key] = records_list
                         save_memory(st.session_state.db)
-                        st.success("🎉 Changes successfully synchronized back to simulator memory structure!")
+                        st.success("🎉 Changes permanently saved for this model arrangement layout!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error preserving metrics layout state: {str(e)}")
+                        st.error(f"Error preserving configuration: {str(e)}")

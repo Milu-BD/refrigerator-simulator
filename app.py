@@ -168,17 +168,25 @@ with tab2:
     if pulldown_file and cpt_file:
         if st.button("💾 Process and Save Report Pair to Memory Buffer"):
             try:
-                # 1. PARSE PULLDOWN
-                df_p_sum = pd.read_excel(pulldown_file, sheet_name='Summary')
+               # 1. PARSE PULLDOWN
+                # header=1 tells pandas to use the row containing 'avg', 'min', 'max' as the column headers
+                df_p_sum = pd.read_excel(pulldown_file, sheet_name='Summary', header=1)
+                
+                # Clean column headers and index strings from any accidental spaces
                 df_p_sum.columns = [str(c).strip() for c in df_p_sum.columns]
                 df_p_sum.iloc[:, 0] = df_p_sum.iloc[:, 0].astype(str).str.strip()
                 df_p_sum.set_index(df_p_sum.columns[0], inplace=True)
                 
+                # We rename the index header cleanly to ensure 'Sensor' can be matched matching your file structure
+                df_p_sum.index.name = 'Metric'
+                
                 mapping_keys = {'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'tvc':'tvc'}
+                
+                # Now looking up 'avg' will work perfectly because 'avg' is now a recognized column header!
                 p_extracted = {f: float(df_p_sum.loc[xl, 'avg']) if xl in df_p_sum.index else 0.0 for f, xl in mapping_keys.items()}
                 
-                # Falling calculation strategy logic loop
-                if 'Sensor' in df_p_sum.index and not pd.isna(df_p_sum.loc['Sensor', 'avg']):
+                # Falling calculation strategy logic loop for the baseline sensor mapping
+                if 'Sensor' in df_p_sum.index and pd.notna(df_p_sum.loc['Sensor', 'avg']):
                     resolved_sensor = float(df_p_sum.loc['Sensor', 'avg'])
                 elif 'Eva Out100' in df_p_sum.index and 'Eva Out' in df_p_sum.index:
                     resolved_sensor = (float(df_p_sum.loc['Eva Out100', 'avg']) + float(df_p_sum.loc['Eva Out', 'avg'])) / 2.0
@@ -186,7 +194,6 @@ with tab2:
                     resolved_sensor = float(df_p_sum.loc['Eva Out', 'avg'])
                 else:
                     resolved_sensor = 0.0
-                
                 # 2. PARSE CPT DATA SHEETS
                 df_cpt = pd.read_excel(cpt_file, sheet_name='Report', skiprows=8)
                 df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)

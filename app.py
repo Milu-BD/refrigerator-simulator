@@ -100,13 +100,13 @@ def verify_db_structure(vol, arr_name, p_amb, c_amb):
         st.session_state.db[vol][arr_name][p_amb][c_amb] = []
 
 # ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
-# 1. 📁 Volume Profile Manager Header & Active Model Dropdown (Sorted Descending)
+# 1. 📁 Volume Profile Manager Header & Active Model Dropdown (Sorted Ascending)
 st.sidebar.header("📁 Volume Profile Manager")
 existing_volumes = list(st.session_state.db.keys())
 
-# Sort models in descending order (e.g., 500L, 365L, 175L)
+# Sort models in ascending order (e.g., 175L, 365L, 500L)
 if existing_volumes:
-    existing_volumes.sort(reverse=True)
+    existing_volumes.sort(reverse=False)
 selected_volume = st.sidebar.selectbox("Active Refrigerator Model:", existing_volumes if existing_volumes else ["None"])
 
 # --- Delete Model Option ---
@@ -126,7 +126,6 @@ initial_arr = st.sidebar.text_input("Initial Arrangement Name:", placeholder="e.
 
 if st.sidebar.button("Add Volume Segment"):
     if new_vol and initial_arr:
-        # Clean inputs slightly to ensure consistent sorting behavior
         new_vol = new_vol.strip()
         initial_arr = initial_arr.strip()
         
@@ -156,15 +155,15 @@ if st.sidebar.button("Register Arrangement"):
             st.sidebar.success(f"Arrangement '{new_arr}' registered under {selected_volume}!")
             st.rerun()
 
-# 4. Ambient Arrangement Dropdown & Deletion (Sorted Descending)
+# 4. Ambient Arrangement Dropdown & Deletion (Sorted Ascending)
 if selected_volume and selected_volume in st.session_state.db and isinstance(st.session_state.db[selected_volume], dict):
     existing_arrangements = list(st.session_state.db[selected_volume].keys())
 else:
     existing_arrangements = []
 
 if existing_arrangements:
-    # Sort arrangements in descending order (e.g., A2, A1)
-    existing_arrangements.sort(reverse=True)
+    # Sort arrangements in ascending order (e.g., A1, A2)
+    existing_arrangements.sort(reverse=False)
     selected_arrangement = st.sidebar.selectbox("Ambient Arrangement:", existing_arrangements)
     
     # --- Delete Arrangement Option ---

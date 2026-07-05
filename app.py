@@ -114,9 +114,10 @@ if existing_volumes:
     existing_volumes.sort(reverse=False)
 selected_volume = st.sidebar.selectbox("Active Refrigerator Model:", existing_volumes if existing_volumes else ["None"])
 
-# --- Delete Model Option ---
+# --- Delete Model Option (Fixed Overlap) ---
 if existing_volumes and selected_volume != "None":
-    if st.sidebar.button("🗑️ Delete Selected Model", help="Permanently removes this model and all its arrangements"):
+    st.sidebar.caption("⚠️ Permanently removes this model and all its arrangements")
+    if st.sidebar.button("🗑️ Delete Selected Model"):
         del st.session_state.db[selected_volume]
         save_memory(st.session_state.db)
         st.sidebar.warning(f"Model '{selected_volume}' deleted.")
@@ -124,7 +125,7 @@ if existing_volumes and selected_volume != "None":
 
 st.sidebar.markdown("---")
 
-# 2. Ambient Arrangement Dropdown & Deletion (Sorted Ascending)
+# 2. Select Arrangement of Selected Volume & Deletion (Sorted Ascending)
 if selected_volume and selected_volume in st.session_state.db and isinstance(st.session_state.db[selected_volume], dict):
     existing_arrangements = list(st.session_state.db[selected_volume].keys())
 else:
@@ -132,10 +133,12 @@ else:
 
 if existing_arrangements:
     existing_arrangements.sort(reverse=False)
-    selected_arrangement = st.sidebar.selectbox("Ambient Arrangement:", existing_arrangements)
+    # Renamed the label exactly as requested
+    selected_arrangement = st.sidebar.selectbox("Select Arrangement of Selected Volume:", existing_arrangements)
     
-    # --- Delete Arrangement Option ---
-    if st.sidebar.button("🗑️ Delete Selected Arrangement", help="Removes this arrangement data only"):
+    # --- Delete Arrangement Option (Fixed Overlap) ---
+    st.sidebar.caption("⚠️ Removes this arrangement data only")
+    if st.sidebar.button("🗑️ Delete Selected Arrangement"):
         if len(existing_arrangements) > 1:
             del st.session_state.db[selected_volume][selected_arrangement]
             save_memory(st.session_state.db)

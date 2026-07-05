@@ -304,25 +304,20 @@ with tab2:
         if st.button("💾 Process and Save Report Pair to Memory Buffer", type="primary"):
             try:
                 # -------------------------------------------------------------
-                # NEW INTEGRATED FORMAT PARSING FOR PULLDOWN DATA
+                # 1. PARSE PULLDOWN DATA (NEW INTEGRATED FORMAT)
                 # -------------------------------------------------------------
-                # 1. Read the first sheet (Index 0). Row names are in column 1 (Index 0), target values are in column 2 (Index 1)
                 df_p_sum = pd.read_excel(repo_pulldown_file, sheet_name=0, header=None)
-                
-                # 2. String-clean the thermocouple label column (case, spaces, hyphens insensitive)
                 df_p_sum[0] = df_p_sum[0].astype(str).apply(normalize_sensor_name)
                 
-                # 3. Create a temporary mapping dictionary from rows to bypass duplicate index crashes
                 sheet_data = {}
                 for _, row in df_p_sum.dropna(subset=[0]).iterrows():
                     lbl = row[0]
-                    if lbl not in sheet_data:  # Secure first match tracking
+                    if lbl not in sheet_data:
                         try:
                             sheet_data[lbl] = float(row[1])
                         except (ValueError, TypeError):
                             continue
 
-                # 4. Extract parameters needed by your ML database architecture
                 mapping_keys = {
                     'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
                     'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'S2':'s2'
@@ -332,44 +327,104 @@ with tab2:
                 for target_key, normalized_label in mapping_keys.items():
                     p_extracted[target_key] = sheet_data.get(normalized_label, 0.0)
                         
-                # 5. Compute the required average of tvc1, tvc2, and tvc3
                 tvc_values = [sheet_data[lbl] for lbl in ['tvc1', 'tvc2', 'tvc3'] if lbl in sheet_data]
-                    
                 if tvc_values:
                     p_extracted['tvc'] = round(sum(tvc_values) / len(tvc_values), 4)
                 else:
                     p_extracted['tvc'] = 0.0
-                    st.warning("⚠️ Warning: tvc1, tvc2, or tvc3 keys not detected in file. 'tvc' set to 0.0")
                     
-                # Extract baseline ambient sensor verification parameter if present
                 resolved_sensor = sheet_data.get('sensor', 0.0)
+                
                 # -------------------------------------------------------------
-                
-                # --- PARSE CPT FILE (Kept exactly as your baseline layout) ---
-                df_cpt = pd.read_excel(repo_cpt_file, sheet_name='Report', skiprows=8)
-                df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
-                
+                # 2. PARSE CPT DATA (WITH MULTI-FORMAT FAILSAFE)
+                # -------------------------------------------------------------
                 cpt_structured = {}
-                current_flag = "Unknown"
-                for _, r in df_cpt.iterrows():
-                    val_f1 = str(r.iloc[1]).strip()
-                    val_crit = str(r.iloc[2]).strip().lower()
-                    if val_f1 and val_f1 != 'nan' and val_f1 != current_flag:
-                        current_flag = val_f1
-                    if current_flag not in cpt_structured:
-                        cpt_structured[current_flag] = {}
-                    if val_crit in metric_types:
-                        cpt_structured[current_flag][val_crit] = {
-                            "tf-1": float(r.iloc[3]), "tf-2": float(r.iloc[4]), "tf-3": float(r.iloc[5]),
-                            "tf-4": float(r.iloc[6]), "tf-5": float(r.iloc[7]), "tc-1": float(r.iloc[9]),
-                            "tc-2": float(r.iloc[10]), "tc-3": float(r.iloc[11]), "tvc": float(r.iloc[13]),
-                            "S2": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0,
-                            "Sensor": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0
-                        }
+                
+                try:
+                    # Strategy A: Try parsing using your original 1st format layout
+                    df_cpt = pd.read_excel(repo_cpt_file, sheet_name='Report', skiprows=8)
+                    df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
+                    
+                    current_flag = "Unknown"
+                    for _, r in df_cpt.iterrows():
+                        val_f1 = str(r.iloc[1]).strip()
+                        val_crit = str(r.iloc[2]).strip().lower()
+                        if val_f1 and val_f1 != 'nan' and val_f1 != current_flag:
+                            current_flag = val_f1
+                        if current_flag not in cpt_structured:
+                            cpt_structured[current_flag] = {}
+                        if val_crit in metric_types:
+                            cpt_structured[current_flag][val_crit] = {
+                                "tf-1": float(r.iloc[3]), "tf-2": float(r.iloc[4]), "tf-3": float(r.iloc[5]),
+                                "tf-4": float(r.iloc[6]), "tf-5": float(r.iloc[7]), "tc-1": float(r.iloc[9]),
+                                "tc-2": float(r.iloc[10]), "tc-3": float(r.iloc[11]), "tvc": float(r.iloc[13]),
+                                "S2": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0,
+                                "Sensor": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0
+                            }
+                except Exception:
+                    # Strategy B: Fallback to the 2nd sheet layout format 
+                    # Reference Layout: "CPT _307L_-REV-0_F-11668_R027374_L12,P6_1.xlsx"
+                    df_cpt_alt = pd.read_excel(repo_cpt_file, sheet_name=1, header=None)
+                    
+                    row_10 = df_cpt_alt.iloc[10].astype(str).str.strip().str.lower().fillna("")
+                    row_11 = df_cpt_alt.iloc[11].astype(str).str.strip().str.lower().fillna("")
+                    
+                    combined_headers = []
+                    for r10, r11 in zip(row_10, row_11):
+                        lbl = r11 if r11 and r11 != "nan" else r10
+                        lbl = lbl.replace(" ", "").replace("-", "").replace("_", "")
+                        if "vc(" in lbl: lbl = "vc"
+                        if "sensor(" in lbl: lbl = "sensor"
+                        if "%rt" in lbl or "runtime%" in lbl or "runtime" == lbl: lbl = "runtime_pct"
+                        combined_headers.append(lbl)
+                        
+                    df_cpt_alt.columns = combined_headers
+                    df_data_rows = df_cpt_alt.iloc[12:].dropna(subset=["datacriteria"]).copy()
+                    
+                    current_flag = "Unknown"
+                    for _, row in df_data_rows.iterrows():
+                        val_f1 = str(row.iloc[0]).strip()
+                        val_crit = str(row.get("datacriteria", "")).strip().lower()
+                        
+                        if val_f1 and val_f1 != "nan" and val_f1 != current_flag:
+                            current_flag = val_f1
+                            
+                        if current_flag not in cpt_structured:
+                            cpt_structured[current_flag] = {}
+                            
+                        # Universal Skip-Rule check
+                        try:
+                            rt_val = float(row.get("runtime_pct", 0.0))
+                        except (ValueError, TypeError):
+                            rt_val = 0.0
+                            
+                        # UNIVERSAL SKIP-RULE: If Run Time % == 100, skip parsing core data for this row
+                        if rt_val == 100:
+                            continue
+                            
+                        if val_crit in ["mean", "avg", "average"]:
+                            try:
+                                cpt_structured[current_flag][val_crit] = {
+                                    "tf-1": float(row.get("tf1", 0.0)),
+                                    "tf-2": float(row.get("tf2", 0.0)),
+                                    "tf-3": float(row.get("tf3", 0.0)),
+                                    "tf-4": float(row.get("tf4", 0.0)),
+                                    "tf-5": float(row.get("tf5", 0.0)),
+                                    "tc-1": float(row.get("tc1", 0.0)),
+                                    "tc-2": float(row.get("tc2", 0.0)),
+                                    "tc-3": float(row.get("tc3", 0.0)),
+                                    "tvc":  float(row.get("vc", 0.0)),
+                                    "S2":   float(row.get("s2", 0.0)),
+                                    "Sensor": float(row.get("sensor", 0.0))
+                                }
+                            except (ValueError, TypeError):
+                                continue
 
+                # -------------------------------------------------------------
+                # 3. SAVE TO DATABASE PIPELINE
+                # -------------------------------------------------------------
                 new_block = {"pulldown_data": p_extracted, "pulldown_baseline_sensor": resolved_sensor, "cpt_data": cpt_structured}
                 
-                # --- DATABASE HISTORY PERSISTENCE LAYER ---
                 verify_db_structure(selected_volume, selected_arrangement, p_repo_key, c_repo_key)
                 st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key].append(new_block)
                 st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key] = st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key][-5:]

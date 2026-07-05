@@ -102,43 +102,73 @@ def verify_db_structure(vol, arr_name, p_amb, c_amb):
 # ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
 # 1. 📁 Volume Profile Manager Header & Active Model Dropdown
 st.sidebar.header("📁 Volume Profile Manager")
-existing_volumes = list(st.session_state.db.keys()) or ["365L"]
-selected_volume = st.sidebar.selectbox("Active Refrigerator Model:", existing_volumes)
+existing_volumes = list(st.session_state.db.keys())
+selected_volume = st.sidebar.selectbox("Active Refrigerator Model:", existing_volumes if existing_volumes else ["None"])
+
+# --- Delete Model Option ---
+if existing_volumes:
+    if st.sidebar.button("🗑️ Delete Selected Model", help="Permanently removes this model and all its arrangements"):
+        del st.session_state.db[selected_volume]
+        save_memory(st.session_state.db)
+        st.sidebar.warning(f"Model '{selected_volume}' deleted.")
+        st.rerun()
 
 st.sidebar.markdown("---")
 
-# 2. ➕ Register New Volume Model Form
-new_vol = st.sidebar.text_input("➕ Register New Volume Model:")
+# 2. ➕ Register New Volume Model Form (Forces an initial Arrangement Name)
+st.sidebar.subheader("➕ Register New Volume Model")
+new_vol = st.sidebar.text_input("New Model Name:", placeholder="e.g., 365L")
+initial_arr = st.sidebar.text_input("Initial Arrangement Name:", placeholder="e.g., A1")
+
 if st.sidebar.button("Add Volume Segment"):
-    if new_vol and new_vol not in st.session_state.db:
-        st.session_state.db[new_vol] = {"Default_Arrangement": {}}
-        save_memory(st.session_state.db)
-        st.success(f"Model {new_vol} registered.")
-        st.rerun()
+    if new_vol and initial_arr:
+        if new_vol not in st.session_state.db:
+            # Create the model using your custom arrangement name instead of a generic default
+            st.session_state.db[new_vol] = {initial_arr: {}}
+            save_memory(st.session_state.db)
+            st.success(f"Model {new_vol} initialized with arrangement {initial_arr}!")
+            st.rerun()
+        else:
+            st.sidebar.error("This model name already exists.")
+    elif new_vol or initial_arr:
+        st.sidebar.error("⚠️ You must provide both the Model Name AND the Initial Arrangement Name.")
 
 st.sidebar.markdown("---")
 
 # 3. ➕ Create New Arrangement Inputs
 st.sidebar.subheader("📐 Design Arrangements")
-new_arr = st.sidebar.text_input("➕ Create New Arrangement:", placeholder="e.g., Capillary_V2_Chiller_Modified")
+new_arr = st.sidebar.text_input("➕ Create New Arrangement:", placeholder="e.g., A2")
 if st.sidebar.button("Register Arrangement"):
-    if new_arr:
+    if new_arr and selected_volume and selected_volume != "None":
         if selected_volume not in st.session_state.db or not isinstance(st.session_state.db[selected_volume], dict):
             st.session_state.db[selected_volume] = {}
         if new_arr not in st.session_state.db[selected_volume]:
             st.session_state.db[selected_volume][new_arr] = {}
             save_memory(st.session_state.db)
-            st.sidebar.success(f"Arrangement '{new_arr}' registered!")
+            st.sidebar.success(f"Arrangement '{new_arr}' registered under {selected_volume}!")
             st.rerun()
 
-# 4. Ambient Arrangement Dropdown
-if selected_volume in st.session_state.db and isinstance(st.session_state.db[selected_volume], dict):
-    existing_arrangements = list(st.session_state.db[selected_volume].keys()) or ["Default_Arrangement"]
+# 4. Ambient Arrangement Dropdown & Deletion
+if selected_volume and selected_volume in st.session_state.db and isinstance(st.session_state.db[selected_volume], dict):
+    existing_arrangements = list(st.session_state.db[selected_volume].keys())
 else:
-    existing_arrangements = ["Default_Arrangement"]
+    existing_arrangements = []
 
-selected_arrangement = st.sidebar.selectbox("Ambient Arrangement:", existing_arrangements)
-
+if existing_arrangements:
+    selected_arrangement = st.sidebar.selectbox("Ambient Arrangement:", existing_arrangements)
+    
+    # --- Delete Arrangement Option ---
+    if st.sidebar.button("🗑️ Delete Selected Arrangement", help="Removes this arrangement data only"):
+        if len(existing_arrangements) > 1:
+            del st.session_state.db[selected_volume][selected_arrangement]
+            save_memory(st.session_state.db)
+            st.sidebar.warning(f"Arrangement '{selected_arrangement}' deleted.")
+            st.rerun()
+        else:
+            st.sidebar.error("❌ Cannot delete the last remaining arrangement. A model must have at least one arrangement layout. Delete the entire model instead.")
+else:
+    selected_arrangement = "None"
+    st.sidebar.caption("No arrangements found. Register one above.")
 
 # === RESTORED TAB DEFINITIONS ===
 tab1, tab2, tab3 = st.tabs(["🎛️ Run Automated Simulator", "🛠️ Data Repository Room", "🔍 Reviewer Dashboard"])

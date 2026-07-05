@@ -32,6 +32,12 @@ if 'reviewer_logged_in' not in st.session_state:
 tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', 'tvc', 'S2']
 metric_types = ['mean', 'min', 'max', '(max+min)/2']
 
+# Place this near the top of app.py with your other helper functions
+def normalize_sensor_name(name):
+    if not isinstance(name, str):
+        return ""
+    # Lowercase, remove hyphens, spaces, and underscores (e.g., "tf-1" -> "tf1")
+    return name.lower().replace(" ", "").replace("-", "").replace("_", "").strip()
 # --- ADVANCED INTERPOLATION ENGINE ---
 def run_automated_simulation(volume_records, new_pulldown, target_sensors):
     results_map = {}
@@ -297,18 +303,49 @@ with tab2:
     if repo_pulldown_file and repo_cpt_file:
         if st.button("💾 Process and Save Report Pair to Memory Buffer", type="primary"):
             try:
-                df_p_sum = pd.read_excel(repo_pulldown_file, sheet_name='Summary', header=1)
-                df_p_sum.columns = [str(c).strip() for c in df_p_sum.columns]
-                df_p_sum.iloc[:, 0] = df_p_sum.iloc[:, 0].astype(str).str.strip()
-                df_p_sum.set_index(df_p_sum.columns[0], inplace=True)
+                # -------------------------------------------------------------
+                # NEW INTEGRATED FORMAT PARSING FOR PULLDOWN DATA
+                # -------------------------------------------------------------
+                # 1. Read the first sheet (Index 0). Row names are in column 1 (Index 0), target values are in column 2 (Index 1)
+                df_p_sum = pd.read_excel(repo_pulldown_file, sheet_name=0, header=None)
                 
+                # 2. String-clean the thermocouple label column (case, spaces, hyphens insensitive)
+                df_p_sum[0] = df_p_sum[0].astype(str).apply(normalize_sensor_name)
+                
+                # 3. Create a temporary mapping dictionary from rows to bypass duplicate index crashes
+                sheet_data = {}
+                for _, row in df_p_sum.dropna(subset=[0]).iterrows():
+                    lbl = row[0]
+                    if lbl not in sheet_data:  # Secure first match tracking
+                        try:
+                            sheet_data[lbl] = float(row[1])
+                        except (ValueError, TypeError):
+                            continue
+
+                # 4. Extract parameters needed by your ML database architecture
                 mapping_keys = {
                     'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
-                    'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'tvc':'tvc', 'S2':'S2'
+                    'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'S2':'s2'
                 }
-                p_extracted = {f: float(df_p_sum.loc[xl, 'avg']) if xl in df_p_sum.index else 0.0 for f, xl in mapping_keys.items()}
-                resolved_sensor = float(df_p_sum.loc['Sensor', 'avg']) if 'Sensor' in df_p_sum.index else 0.0
                 
+                p_extracted = {}
+                for target_key, normalized_label in mapping_keys.items():
+                    p_extracted[target_key] = sheet_data.get(normalized_label, 0.0)
+                        
+                # 5. Compute the required average of tvc1, tvc2, and tvc3
+                tvc_values = [sheet_data[lbl] for lbl in ['tvc1', 'tvc2', 'tvc3'] if lbl in sheet_data]
+                    
+                if tvc_values:
+                    p_extracted['tvc'] = round(sum(tvc_values) / len(tvc_values), 4)
+                else:
+                    p_extracted['tvc'] = 0.0
+                    st.warning("⚠️ Warning: tvc1, tvc2, or tvc3 keys not detected in file. 'tvc' set to 0.0")
+                    
+                # Extract baseline ambient sensor verification parameter if present
+                resolved_sensor = sheet_data.get('sensor', 0.0)
+                # -------------------------------------------------------------
+                
+                # --- PARSE CPT FILE (Kept exactly as your baseline layout) ---
                 df_cpt = pd.read_excel(repo_cpt_file, sheet_name='Report', skiprows=8)
                 df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
                 
@@ -332,6 +369,7 @@ with tab2:
 
                 new_block = {"pulldown_data": p_extracted, "pulldown_baseline_sensor": resolved_sensor, "cpt_data": cpt_structured}
                 
+                # --- DATABASE HISTORY PERSISTENCE LAYER ---
                 verify_db_structure(selected_volume, selected_arrangement, p_repo_key, c_repo_key)
                 st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key].append(new_block)
                 st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key] = st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key][-5:]

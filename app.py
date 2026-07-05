@@ -100,11 +100,18 @@ def verify_db_structure(vol, arr_name, p_amb, c_amb):
         st.session_state.db[vol][arr_name][p_amb][c_amb] = []
 
 # ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
+# Initialize empty string state variables for inputs if they don't exist yet
+if "input_new_vol" not in st.session_state:
+    st.session_state.input_new_vol = ""
+if "input_initial_arr" not in st.session_state:
+    st.session_state.input_initial_arr = ""
+if "input_new_arr" not in st.session_state:
+    st.session_state.input_new_arr = ""
+
 # 1. 📁 Volume Profile Manager Header & Active Model Dropdown (Sorted Ascending)
 st.sidebar.header("📁 Volume Profile Manager")
 existing_volumes = list(st.session_state.db.keys())
 
-# Sort models in ascending order (e.g., 175L, 365L, 500L)
 if existing_volumes:
     existing_volumes.sort(reverse=False)
 selected_volume = st.sidebar.selectbox("Active Refrigerator Model:", existing_volumes if existing_volumes else ["None"])
@@ -121,18 +128,22 @@ st.sidebar.markdown("---")
 
 # 2. ➕ Register New Volume Model Form (Forces an initial Arrangement Name)
 st.sidebar.subheader("➕ Register New Volume Model")
-new_vol = st.sidebar.text_input("New Model Name:", placeholder="e.g., 365L")
-initial_arr = st.sidebar.text_input("Initial Arrangement Name:", placeholder="e.g., A1")
+new_vol = st.sidebar.text_input("New Model Name:", placeholder="e.g., 365L", key="input_new_vol")
+initial_arr = st.sidebar.text_input("Initial Arrangement Name:", placeholder="e.g., A1", key="input_initial_arr")
 
 if st.sidebar.button("Add Volume Segment"):
     if new_vol and initial_arr:
-        new_vol = new_vol.strip()
-        initial_arr = initial_arr.strip()
+        new_vol_clean = new_vol.strip()
+        initial_arr_clean = initial_arr.strip()
         
-        if new_vol not in st.session_state.db:
-            st.session_state.db[new_vol] = {initial_arr: {}}
+        if new_vol_clean not in st.session_state.db:
+            st.session_state.db[new_vol_clean] = {initial_arr_clean: {}}
             save_memory(st.session_state.db)
-            st.success(f"Model {new_vol} initialized with arrangement {initial_arr}!")
+            st.success(f"Model {new_vol_clean} initialized with arrangement {initial_arr_clean}!")
+            
+            # CLEAR CELLS: Wipe state variables before rerun
+            st.session_state.input_new_vol = ""
+            st.session_state.input_initial_arr = ""
             st.rerun()
         else:
             st.sidebar.error("This model name already exists.")
@@ -143,16 +154,19 @@ st.sidebar.markdown("---")
 
 # 3. ➕ Create New Arrangement Inputs
 st.sidebar.subheader("📐 Design Arrangements")
-new_arr = st.sidebar.text_input("➕ Create New Arrangement:", placeholder="e.g., A2")
+new_arr = st.sidebar.text_input("➕ Create New Arrangement:", placeholder="e.g., A2", key="input_new_arr")
 if st.sidebar.button("Register Arrangement"):
     if new_arr and selected_volume and selected_volume != "None":
-        new_arr = new_arr.strip()
+        new_arr_clean = new_arr.strip()
         if selected_volume not in st.session_state.db or not isinstance(st.session_state.db[selected_volume], dict):
             st.session_state.db[selected_volume] = {}
-        if new_arr not in st.session_state.db[selected_volume]:
-            st.session_state.db[selected_volume][new_arr] = {}
+        if new_arr_clean not in st.session_state.db[selected_volume]:
+            st.session_state.db[selected_volume][new_arr_clean] = {}
             save_memory(st.session_state.db)
-            st.sidebar.success(f"Arrangement '{new_arr}' registered under {selected_volume}!")
+            st.sidebar.success(f"Arrangement '{new_arr_clean}' registered under {selected_volume}!")
+            
+            # CLEAR CELL: Wipe single arrangement input field state variable
+            st.session_state.input_new_arr = ""
             st.rerun()
 
 # 4. Ambient Arrangement Dropdown & Deletion (Sorted Ascending)
@@ -162,7 +176,6 @@ else:
     existing_arrangements = []
 
 if existing_arrangements:
-    # Sort arrangements in ascending order (e.g., A1, A2)
     existing_arrangements.sort(reverse=False)
     selected_arrangement = st.sidebar.selectbox("Ambient Arrangement:", existing_arrangements)
     

@@ -124,10 +124,53 @@ if existing_volumes and selected_volume != "None":
 
 st.sidebar.markdown("---")
 
-# 2. ➕ Register New Volume Model Form (Forces an initial Arrangement Name)
-st.sidebar.subheader("➕ Register New Volume Model")
+# 2. Ambient Arrangement Dropdown & Deletion (Sorted Ascending)
+if selected_volume and selected_volume in st.session_state.db and isinstance(st.session_state.db[selected_volume], dict):
+    existing_arrangements = list(st.session_state.db[selected_volume].keys())
+else:
+    existing_arrangements = []
 
-# Using a dynamic key suffix ensures the cells clear completely upon submission
+if existing_arrangements:
+    existing_arrangements.sort(reverse=False)
+    selected_arrangement = st.sidebar.selectbox("Ambient Arrangement:", existing_arrangements)
+    
+    # --- Delete Arrangement Option ---
+    if st.sidebar.button("🗑️ Delete Selected Arrangement", help="Removes this arrangement data only"):
+        if len(existing_arrangements) > 1:
+            del st.session_state.db[selected_volume][selected_arrangement]
+            save_memory(st.session_state.db)
+            st.sidebar.warning(f"Arrangement '{selected_arrangement}' deleted.")
+            st.rerun()
+        else:
+            st.sidebar.error("❌ Cannot delete the last remaining arrangement. A model must have at least one arrangement layout. Delete the entire model instead.")
+else:
+    selected_arrangement = "None"
+    st.sidebar.caption("No arrangements found. Register one below.")
+
+st.sidebar.markdown("---")
+
+# 3. ➕ Create New Arrangement Inputs
+st.sidebar.subheader("📐 Design Arrangements")
+new_arr = st.sidebar.text_input("➕ Create New Arrangement:", placeholder="e.g., A2", key=f"input_arr_{st.session_state.arr_form_id}")
+
+if st.sidebar.button("Register Arrangement"):
+    if new_arr and selected_volume and selected_volume != "None":
+        new_arr_clean = new_arr.strip()
+        if selected_volume not in st.session_state.db or not isinstance(st.session_state.db[selected_volume], dict):
+            st.session_state.db[selected_volume] = {}
+        if new_arr_clean not in st.session_state.db[selected_volume]:
+            st.session_state.db[selected_volume][new_arr_clean] = {}
+            save_memory(st.session_state.db)
+            st.sidebar.success(f"Arrangement '{new_arr_clean}' registered under {selected_volume}!")
+            
+            # FORCE CELL CLEAR: Increment the arrangement form ID to reset input box
+            st.session_state.arr_form_id += 1
+            st.rerun()
+
+st.sidebar.markdown("---")
+
+# 4. ➕ Register New Volume Model Form (Moved to the end of the sidebar)
+st.sidebar.subheader("➕ Register New Volume Model")
 new_vol = st.sidebar.text_input("New Model Name:", placeholder="e.g., 365L", key=f"input_vol_{st.session_state.model_form_id}")
 initial_arr = st.sidebar.text_input("Initial Arrangement Name:", placeholder="e.g., A1", key=f"input_init_{st.session_state.model_form_id}")
 
@@ -149,49 +192,6 @@ if st.sidebar.button("Add Volume Segment"):
     elif new_vol or initial_arr:
         st.sidebar.error("⚠️ You must provide both the Model Name AND the Initial Arrangement Name.")
 
-st.sidebar.markdown("---")
-
-# 3. ➕ Create New Arrangement Inputs
-st.sidebar.subheader("📐 Design Arrangements")
-
-new_arr = st.sidebar.text_input("➕ Create New Arrangement:", placeholder="e.g., A2", key=f"input_arr_{st.session_state.arr_form_id}")
-
-if st.sidebar.button("Register Arrangement"):
-    if new_arr and selected_volume and selected_volume != "None":
-        new_arr_clean = new_arr.strip()
-        if selected_volume not in st.session_state.db or not isinstance(st.session_state.db[selected_volume], dict):
-            st.session_state.db[selected_volume] = {}
-        if new_arr_clean not in st.session_state.db[selected_volume]:
-            st.session_state.db[selected_volume][new_arr_clean] = {}
-            save_memory(st.session_state.db)
-            st.sidebar.success(f"Arrangement '{new_arr_clean}' registered under {selected_volume}!")
-            
-            # FORCE CELL CLEAR: Increment the arrangement form ID to reset input box
-            st.session_state.arr_form_id += 1
-            st.rerun()
-
-# 4. Ambient Arrangement Dropdown & Deletion (Sorted Ascending)
-if selected_volume and selected_volume in st.session_state.db and isinstance(st.session_state.db[selected_volume], dict):
-    existing_arrangements = list(st.session_state.db[selected_volume].keys())
-else:
-    existing_arrangements = []
-
-if existing_arrangements:
-    existing_arrangements.sort(reverse=False)
-    selected_arrangement = st.sidebar.selectbox("Ambient Arrangement:", existing_arrangements)
-    
-    # --- Delete Arrangement Option ---
-    if st.sidebar.button("🗑️ Delete Selected Arrangement", help="Removes this arrangement data only"):
-        if len(existing_arrangements) > 1:
-            del st.session_state.db[selected_volume][selected_arrangement]
-            save_memory(st.session_state.db)
-            st.sidebar.warning(f"Arrangement '{selected_arrangement}' deleted.")
-            st.rerun()
-        else:
-            st.sidebar.error("❌ Cannot delete the last remaining arrangement. A model must have at least one arrangement layout. Delete the entire model instead.")
-else:
-    selected_arrangement = "None"
-    st.sidebar.caption("No arrangements found. Register one above.")
 
 # === RESTORED TAB DEFINITIONS ===
 tab1, tab2, tab3 = st.tabs(["🎛️ Run Automated Simulator", "🛠️ Data Repository Room", "🔍 Reviewer Dashboard"])

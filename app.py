@@ -297,9 +297,9 @@ with tab2:
     
     col_f1, col_f2 = st.columns(2)
     with col_f1:
-        repo_pulldown_file = st.file_uploader(f"Upload Pulldown Excel ({repo_p_ambient})", type=["xlsx"], key=f"r_p_file_{p_repo_key}_{c_repo_key}")
+        repo_pulldown_file = st.file_uploader(f"Upload Pulldown Excel ({repo_p_ambient})", type=["xlsx", "xls"], key=f"r_p_file_{p_repo_key}_{c_repo_key}")
     with col_f2:
-        repo_cpt_file = st.file_uploader(f"Upload Respected CPT Excel ({repo_c_ambient})", type=["xlsx"], key=f"r_cpt_file_{p_repo_key}_{c_repo_key}")
+        repo_cpt_file = st.file_uploader(f"Upload Respected CPT Excel ({repo_c_ambient})", type=["xlsx", "xls"], key=f"r_cpt_file_{p_repo_key}_{c_repo_key}")
         
     if repo_pulldown_file and repo_cpt_file:
         if st.button("💾 Process and Save Report Pair to Memory Buffer", type="primary"):
@@ -337,7 +337,7 @@ with tab2:
                 resolved_sensor = sheet_data.get('sensor', 0.0)
                 
                 # -------------------------------------------------------------
-                # 2. PARSE CPT DATA (3-WAY CASCADE MULTI-FORMAT FAILSAFE)
+                # 2. PARSE CPT DATA (4-WAY CASCADE MULTI-FORMAT FAILSAFE)
                 # -------------------------------------------------------------
                 cpt_structured = {}
                 parsed_successfully = False
@@ -425,7 +425,7 @@ with tab2:
                     except Exception:
                         pass
 
-                # --- STRATEGY C: Section Layout Matrix Format ("F-11666_R027963_L12 Print event.xlsx") ---
+                # --- STRATEGY C: Section Layout Matrix Format ("Print event.xlsx") ---
                 if not parsed_successfully:
                     try:
                         df_cpt_seg = pd.read_excel(repo_cpt_file, sheet_name=0, header=None)
@@ -470,8 +470,80 @@ with tab2:
                                 del cpt_structured[flg]["tvc_vals"]
                                 
                         parsed_successfully = True
-                    except Exception as seg_err:
-                        st.error(f"Failed parsing section layout format: {str(seg_err)}")
+                    except Exception:
+                        pass
+
+                # --- STRATEGY D: Summary-Block Matrix Format ("307L_F-12045... Layout") ---
+                if not parsed_successfully:
+                    try:
+                        df_cpt_block = pd.read_excel(repo_cpt_file, sheet_name='Report', header=None)
+                        
+                        current_flag = "Unknown"
+                        flag_extracted = {}
+                        
+                        for idx, row in df_cpt_block.iterrows():
+                            # Row header test logic scanning column 9 for "Test Flag:"
+                            if pd.notna(row.iloc[9]) and "Test Flag:" in str(row.iloc[9]):
+                                if current_flag != "Unknown" and flag_extracted:
+                                    if "tvc_sum" in flag_extracted: del flag_extracted["tvc_sum"]
+                                    if current_flag not in cpt_structured:
+                                        cpt_structured[current_flag] = {"mean": {}}
+                                    cpt_structured[current_flag]["mean"] = flag_extracted.copy()
+                                
+                                current_flag = str(row.iloc[9]).split(":")[-1].strip()
+                                flag_extracted = {
+                                    "tf-1": 0.0, "tf-2": 0.0, "tf-3": 0.0, "tf-4": 0.0, "tf-5": 0.0,
+                                    "tc-1": 0.0, "tc-2": 0.0, "tc-3": 0.0, "tvc": 0.0, "S2": 0.0, "Sensor": 0.0
+                                }
+                                continue
+                            
+                            if current_flag != "Unknown":
+                                # Scan through column layout sections (tags start at index 0, 5, 10)
+                                for col_offset in [0, 5, 10]:
+                                    if col_offset < len(row):
+                                        tag = str(row.iloc[col_offset]).strip()
+                                        
+                                        # Freezer Thermocouples (extract mean)
+                                        if tag in ["tF1", "tF2", "tF3", "tF4", "tF5"]:
+                                            key_mapped = f"tf-{tag[-1]}"
+                                            try: flag_extracted[key_mapped] = float(row.iloc[col_offset + 1])
+                                            except (ValueError, TypeError): pass
+                                            
+                                        # Cabin/Refrigerator Thermocouples (extract mean)
+                                        elif tag in ["tc1", "tc2", "tc3"]:
+                                            key_mapped = f"tc-{tag[-1]}"
+                                            try: flag_extracted[key_mapped] = float(row.iloc[col_offset + 1])
+                                            except (ValueError, TypeError): pass
+                                            
+                                        # TVC Multi-point Collection (extract mean)
+                                        elif tag in ["tVC1", "tVC2", "tVC3"]:
+                                            if "tvc_sum" not in flag_extracted:
+                                                flag_extracted["tvc_sum"] = []
+                                            try:
+                                                flag_extracted["tvc_sum"].append(float(row.iloc[col_offset + 1]))
+                                                flag_extracted["tvc"] = round(sum(flag_extracted["tvc_sum"]) / len(flag_extracted["tvc_sum"]), 4)
+                                            except (ValueError, TypeError): pass
+                                            
+                                        # S2 Ambient (extract mean)
+                                        elif tag == "tS21":
+                                            try: flag_extracted["S2"] = float(row.iloc[col_offset + 1])
+                                            except (ValueError, TypeError): pass
+                                            
+                                        # Fin Core Defrost Sensor (extract min value from column index offset + 2)
+                                        elif tag == "tSensor1":
+                                            try: flag_extracted["Sensor"] = float(row.iloc[col_offset + 2])
+                                            except (ValueError, TypeError): pass
+
+                        if current_flag != "Unknown" and flag_extracted:
+                            if "tvc_sum" in flag_extracted: del flag_extracted["tvc_sum"]
+                            if current_flag not in cpt_structured:
+                                cpt_structured[current_flag] = {"mean": {}}
+                            cpt_structured[current_flag]["mean"] = flag_extracted
+                            
+                        if cpt_structured:
+                            parsed_successfully = True
+                    except Exception as block_err:
+                        st.error(f"Failed parsing summary-block matrix format: {str(block_err)}")
 
                 # -------------------------------------------------------------
                 # 3. SAVE DATA MATRIX TO ENVIRONMENT STORAGE

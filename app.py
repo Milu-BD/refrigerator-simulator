@@ -346,30 +346,45 @@ with tab2:
 with tab3:
     st.subheader("🔒 Repository Memory Inspection & Manipulation")
     
-    rd_c1, rd_c2 = st.columns(2)
-    with rd_c1:
-        rev_p_ambient = st.selectbox("Inspect Pulldown Ambient Space:", ["32°C", "43°C"], key="rev_p_amb")
-    with rd_c2:
-        rev_c_ambient = st.selectbox("Inspect CPT Ambient Space:", ["16°C", "32°C", "43°C"], key="rev_c_amb")
-        
-    p_rev_key = "32C" if "32" in rev_p_ambient else "43C"
-    c_rev_key = "16C" if "16" in rev_c_ambient else ("32C" if "32" in rev_c_ambient else "43C")
-    
+    # --- PHASE 1: PASSWORD GATEWAY ---
     if not st.session_state.reviewer_logged_in:
-        pwd = st.text_input("Enter Reviewer Code Key:", type="password", key=f"rev_pwd_{selected_volume}_{p_rev_key}_{c_rev_key}")
-        if st.button("Unlock Database", key=f"rev_unl_{selected_volume}_{p_rev_key}_{c_rev_key}"):
+        # Dummy ambient keys to protect password form structure on initial boot
+        p_rev_key = "32C"
+        c_rev_key = "16C"
+        
+        pwd = st.text_input("Enter Reviewer Code Key:", type="password", key="rev_pwd_gate")
+        if st.button("Unlock Database", key="rev_unlock_btn"):
             if pwd == REVIEWER_PASSWORD:
                 st.session_state.reviewer_logged_in = True
                 st.rerun()
+            else:
+                st.error("❌ Incorrect Reviewer Code Key.")
+                
+    # --- PHASE 2: SECURE INSIDE ROOM (Only visible after login) ---
     else:
+        # Close secure lock button header
         col_header, col_lock = st.columns([4, 1])
         with col_header:
             st.markdown(f"### 🛠️ Data Editor: **{selected_volume}** | Arrangement: **{selected_arrangement}**")
-            st.caption(f"Currently filtering Pulldown: {rev_p_ambient} / CPT: {rev_c_ambient}")
         with col_lock:
-            if st.button("Close Secure Lock", type="secondary", use_container_width=True, key=f"c_lck_{selected_volume}_{p_rev_key}_{c_rev_key}"):
+            if st.button("Close Secure Lock", type="secondary", use_container_width=True, key="close_lock_btn"):
                 st.session_state.reviewer_logged_in = False
                 st.rerun()
+        
+        st.markdown("---")
+        
+        # Inspection drop-downs are now safely placed here, visible ONLY after logging in
+        rd_c1, rd_c2 = st.columns(2)
+        with rd_c1:
+            rev_p_ambient = st.selectbox("Inspect Pulldown Ambient Space:", ["32°C", "43°C"], key="rev_p_amb")
+        with rd_c2:
+            rev_c_ambient = st.selectbox("Inspect CPT Ambient Space:", ["16°C", "32°C", "43°C"], key="rev_c_amb")
+            
+        p_rev_key = "32C" if "32" in rev_p_ambient else "43C"
+        c_rev_key = "16C" if "16" in rev_c_ambient else ("32C" if "32" in rev_c_ambient else "43C")
+        
+        st.caption(f"Currently filtering Pulldown: {rev_p_ambient} / CPT: {rev_c_ambient}")
+        st.markdown("---")
                 
         verify_db_structure(selected_volume, selected_arrangement, p_rev_key, c_rev_key)
         records_list = st.session_state.db[selected_volume][selected_arrangement][p_rev_key][c_rev_key]

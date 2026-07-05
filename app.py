@@ -302,10 +302,10 @@ with tab2:
         repo_cpt_file = st.file_uploader(f"Upload Respected CPT Excel ({repo_c_ambient})", type=["xlsx", "xls"], key=f"r_cpt_file_{p_repo_key}_{c_repo_key}")
         
     if repo_pulldown_file and repo_cpt_file:
-        if st.button("💾 Process and Save Report Pair to Memory Buffer", type="primary"):
+        if st.button("💾 Process and Train Simulator Memory Buffer", type="primary"):
             try:
                 # -------------------------------------------------------------
-                # 1. PARSE PULLDOWN DATA (ROBUST SINGLE DOOR LAB FORMAT)
+                # 1. PARSE PULLDOWN DATA
                 # -------------------------------------------------------------
                 df_p_sum = pd.read_excel(repo_pulldown_file, sheet_name=0, header=None)
                 df_p_sum[0] = df_p_sum[0].astype(str).apply(normalize_sensor_name)
@@ -314,10 +314,8 @@ with tab2:
                 for _, row in df_p_sum.dropna(subset=[0]).iterrows():
                     lbl = row[0]
                     if lbl not in sheet_data:
-                        try:
-                            sheet_data[lbl] = float(row[1])
-                        except (ValueError, TypeError):
-                            continue
+                        try: sheet_data[lbl] = float(row[1])
+                        except (ValueError, TypeError): continue
 
                 mapping_keys = {
                     'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
@@ -337,12 +335,12 @@ with tab2:
                 resolved_sensor = sheet_data.get('sensor', 0.0)
                 
                 # -------------------------------------------------------------
-                # 2. PARSE CPT DATA (4-WAY CASCADE MULTI-FORMAT FAILSAFE)
+                # 2. PARSE CPT DATA (5-WAY CASCADE MULTI-FORMAT FAILSAFE)
                 # -------------------------------------------------------------
                 cpt_structured = {}
                 parsed_successfully = False
                 
-                # --- STRATEGY A: Original Standard Layout Sheet ('Report') ---
+                # --- STRATEGY A: Original Standard Layout Sheet ---
                 try:
                     df_cpt = pd.read_excel(repo_cpt_file, sheet_name='Report', skiprows=8)
                     df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
@@ -363,12 +361,10 @@ with tab2:
                                 "S2": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0,
                                 "Sensor": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0
                             }
-                    if cpt_structured:
-                        parsed_successfully = True
-                except Exception:
-                    pass
+                    if cpt_structured: parsed_successfully = True
+                except Exception: pass
 
-                # --- STRATEGY B: 2nd Sheet Multi-Row Header Format ("CPT _307L_...") ---
+                # --- STRATEGY B: 2nd Sheet Multi-Row Header Format ---
                 if not parsed_successfully:
                     try:
                         df_cpt_alt = pd.read_excel(repo_cpt_file, sheet_name=1, header=None)
@@ -393,160 +389,158 @@ with tab2:
                                 val_f1 = str(row.iloc[0]).strip()
                                 val_crit = str(row.get("datacriteria", "")).strip().lower()
                                 
-                                if val_f1 and val_f1 != "nan" and val_f1 != current_flag:
-                                    current_flag = val_f1
-                                if current_flag not in cpt_structured:
-                                    cpt_structured[current_flag] = {}
+                                if val_f1 and val_f1 != "nan" and val_f1 != current_flag: current_flag = val_f1
+                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {}
                                     
-                                try:
-                                    rt_val = float(row.get("runtime_pct", 0.0))
-                                except (ValueError, TypeError):
-                                    rt_val = 0.0
+                                try: rt_val = float(row.get("runtime_pct", 0.0))
+                                except (ValueError, TypeError): rt_val = 0.0
                                     
-                                if rt_val == 100:
-                                    continue
+                                if rt_val == 100: continue
                                     
                                 if val_crit in ["mean", "avg", "average"]:
                                     cpt_structured[current_flag][val_crit] = {
-                                        "tf-1": float(row.get("tf1", 0.0)),
-                                        "tf-2": float(row.get("tf2", 0.0)),
-                                        "tf-3": float(row.get("tf3", 0.0)),
-                                        "tf-4": float(row.get("tf4", 0.0)),
-                                        "tf-5": float(row.get("tf5", 0.0)),
-                                        "tc-1": float(row.get("tc1", 0.0)),
-                                        "tc-2": float(row.get("tc2", 0.0)),
-                                        "tc-3": float(row.get("tc3", 0.0)),
-                                        "tvc":  float(row.get("vc", 0.0)),
-                                        "S2":   float(row.get("s2", 0.0)),
+                                        "tf-1": float(row.get("tf1", 0.0)), "tf-2": float(row.get("tf2", 0.0)),
+                                        "tf-3": float(row.get("tf3", 0.0)), "tf-4": float(row.get("tf4", 0.0)),
+                                        "tf-5": float(row.get("tf5", 0.0)), "tc-1": float(row.get("tc1", 0.0)),
+                                        "tc-2": float(row.get("tc2", 0.0)), "tc-3": float(row.get("tc3", 0.0)),
+                                        "tvc":  float(row.get("vc", 0.0)),  "S2":   float(row.get("s2", 0.0)),
                                         "Sensor": float(row.get("sensor", 0.0))
                                     }
-                            if cpt_structured:
-                                parsed_successfully = True
-                    except Exception:
-                        pass
+                            if cpt_structured: parsed_successfully = True
+                    except Exception: pass
 
-                # --- STRATEGY C: Section Layout Matrix Format ("Print event.xlsx") ---
+                # --- STRATEGY C: Section Layout Matrix Format ---
                 if not parsed_successfully:
                     try:
                         df_cpt_seg = pd.read_excel(repo_cpt_file, sheet_name=0, header=None)
-                        
                         current_flag = "Unknown"
                         for idx, r in df_cpt_seg.iterrows():
                             val_0 = str(r.iloc[0]).strip()
-                            
                             if pd.notna(r.iloc[0]) and ("level" in val_0.lower() or "boost" in val_0.lower()):
                                 current_flag = val_0
-                                if current_flag not in cpt_structured:
-                                    cpt_structured[current_flag] = {"mean": {}}
+                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {"mean": {}}
                                 continue
-                                
-                            if val_0.lower() in ["section", "min", "nan", ""] or pd.isna(r.iloc[0]):
-                                continue
-                                
+                            if val_0.lower() in ["section", "min", "nan", ""] or pd.isna(r.iloc[0]): continue
                             clean_tag = normalize_sensor_name(val_0)
                             
                             if current_flag != "Unknown":
                                 if clean_tag == "sensor":
-                                    try:
-                                        cpt_structured[current_flag]["mean"]["Sensor"] = float(r.iloc[5])
-                                    except (ValueError, TypeError, IndexError):
-                                        cpt_structured[current_flag]["mean"]["Sensor"] = float(r.iloc[1])
+                                    try: cpt_structured[current_flag]["mean"]["Sensor"] = float(r.iloc[5])
+                                    except (ValueError, TypeError, IndexError): cpt_structured[current_flag]["mean"]["Sensor"] = float(r.iloc[1])
                                 else:
                                     mapping_dict = {
                                         "tf1": "tf-1", "tf2": "tf-2", "tf3": "tf-3", "tf4": "tf-4", "tf5": "tf-5",
                                         "tc1": "tc-1", "tc2": "tc-2", "tc3": "tc-3", "s2": "S2"
                                     }
-                                    
-                                    if clean_tag in mapping_dict:
-                                        cpt_structured[current_flag]["mean"][mapping_dict[clean_tag]] = float(r.iloc[8])
+                                    if clean_tag in mapping_dict: cpt_structured[current_flag]["mean"][mapping_dict[clean_tag]] = float(r.iloc[8])
                                     elif "tvc" in clean_tag:
-                                        if "tvc_vals" not in cpt_structured[current_flag]:
-                                            cpt_structured[current_flag]["tvc_vals"] = []
+                                        if "tvc_vals" not in cpt_structured[current_flag]: cpt_structured[current_flag]["tvc_vals"] = []
                                         cpt_structured[current_flag]["tvc_vals"].append(float(r.iloc[8]))
 
                         for flg in cpt_structured:
                             if "tvc_vals" in cpt_structured[flg] and cpt_structured[flg]["tvc_vals"]:
                                 cpt_structured[flg]["mean"]["tvc"] = round(sum(cpt_structured[flg]["tvc_vals"]) / len(cpt_structured[flg]["tvc_vals"]), 4)
                                 del cpt_structured[flg]["tvc_vals"]
-                                
                         parsed_successfully = True
-                    except Exception:
-                        pass
+                    except Exception: pass
 
-                # --- STRATEGY D: Summary-Block Matrix Format ("307L_F-12045... Layout") ---
+                # --- STRATEGY D: Summary-Block Layout Matrix Format ---
                 if not parsed_successfully:
                     try:
                         df_cpt_block = pd.read_excel(repo_cpt_file, sheet_name='Report', header=None)
-                        
                         current_flag = "Unknown"
                         flag_extracted = {}
-                        
                         for idx, row in df_cpt_block.iterrows():
-                            # Row header test logic scanning column 9 for "Test Flag:"
                             if pd.notna(row.iloc[9]) and "Test Flag:" in str(row.iloc[9]):
                                 if current_flag != "Unknown" and flag_extracted:
                                     if "tvc_sum" in flag_extracted: del flag_extracted["tvc_sum"]
-                                    if current_flag not in cpt_structured:
-                                        cpt_structured[current_flag] = {"mean": {}}
+                                    if current_flag not in cpt_structured: cpt_structured[current_flag] = {"mean": {}}
                                     cpt_structured[current_flag]["mean"] = flag_extracted.copy()
-                                
                                 current_flag = str(row.iloc[9]).split(":")[-1].strip()
-                                flag_extracted = {
-                                    "tf-1": 0.0, "tf-2": 0.0, "tf-3": 0.0, "tf-4": 0.0, "tf-5": 0.0,
-                                    "tc-1": 0.0, "tc-2": 0.0, "tc-3": 0.0, "tvc": 0.0, "S2": 0.0, "Sensor": 0.0
-                                }
+                                flag_extracted = {"tf-1": 0.0, "tf-2": 0.0, "tf-3": 0.0, "tf-4": 0.0, "tf-5": 0.0, "tc-1": 0.0, "tc-2": 0.0, "tc-3": 0.0, "tvc": 0.0, "S2": 0.0, "Sensor": 0.0}
                                 continue
-                            
                             if current_flag != "Unknown":
-                                # Scan through column layout sections (tags start at index 0, 5, 10)
                                 for col_offset in [0, 5, 10]:
                                     if col_offset < len(row):
                                         tag = str(row.iloc[col_offset]).strip()
-                                        
-                                        # Freezer Thermocouples (extract mean)
                                         if tag in ["tF1", "tF2", "tF3", "tF4", "tF5"]:
-                                            key_mapped = f"tf-{tag[-1]}"
-                                            try: flag_extracted[key_mapped] = float(row.iloc[col_offset + 1])
+                                            try: flag_extracted[f"tf-{tag[-1]}"] = float(row.iloc[col_offset + 1])
                                             except (ValueError, TypeError): pass
-                                            
-                                        # Cabin/Refrigerator Thermocouples (extract mean)
                                         elif tag in ["tc1", "tc2", "tc3"]:
-                                            key_mapped = f"tc-{tag[-1]}"
-                                            try: flag_extracted[key_mapped] = float(row.iloc[col_offset + 1])
+                                            try: flag_extracted[f"tc-{tag[-1]}"] = float(row.iloc[col_offset + 1])
                                             except (ValueError, TypeError): pass
-                                            
-                                        # TVC Multi-point Collection (extract mean)
                                         elif tag in ["tVC1", "tVC2", "tVC3"]:
-                                            if "tvc_sum" not in flag_extracted:
-                                                flag_extracted["tvc_sum"] = []
+                                            if "tvc_sum" not in flag_extracted: flag_extracted["tvc_sum"] = []
                                             try:
                                                 flag_extracted["tvc_sum"].append(float(row.iloc[col_offset + 1]))
                                                 flag_extracted["tvc"] = round(sum(flag_extracted["tvc_sum"]) / len(flag_extracted["tvc_sum"]), 4)
                                             except (ValueError, TypeError): pass
-                                            
-                                        # S2 Ambient (extract mean)
                                         elif tag == "tS21":
                                             try: flag_extracted["S2"] = float(row.iloc[col_offset + 1])
                                             except (ValueError, TypeError): pass
-                                            
-                                        # Fin Core Defrost Sensor (extract min value from column index offset + 2)
                                         elif tag == "tSensor1":
                                             try: flag_extracted["Sensor"] = float(row.iloc[col_offset + 2])
                                             except (ValueError, TypeError): pass
-
                         if current_flag != "Unknown" and flag_extracted:
                             if "tvc_sum" in flag_extracted: del flag_extracted["tvc_sum"]
-                            if current_flag not in cpt_structured:
-                                cpt_structured[current_flag] = {"mean": {}}
+                            if current_flag not in cpt_structured: cpt_structured[current_flag] = {"mean": {}}
                             cpt_structured[current_flag]["mean"] = flag_extracted
-                            
+                        if cpt_structured: parsed_successfully = True
+                    except Exception: pass
+
+                # --- STRATEGY E: Horizontal Wide Matrix Block Format ("CPT_307L_-REV-0...") ---
+                if not parsed_successfully:
+                    try:
+                        df_cpt_horiz = pd.read_excel(repo_cpt_file, sheet_name=0, header=None)
+                        for r_idx, row in df_cpt_horiz.iterrows():
+                            val_0 = str(row.iloc[0]).strip()
+                            if pd.notna(row.iloc[0]) and any(x in val_0.lower() for x in ["level", "boost"]):
+                                current_flag = val_0
+                                flag_extracted = {
+                                    "tf-1": 0.0, "tf-2": 0.0, "tf-3": 0.0, "tf-4": 0.0, "tf-5": 0.0,
+                                    "tc-1": 0.0, "tc-2": 0.0, "tc-3": 0.0, "tvc": 0.0, "S2": 0.0, "Sensor": 0.0
+                                }
+                                tvc_accumulator = []
+                                
+                                # Process the 10 data matrix rows underneath the flag header row
+                                for target_offset in range(1, 11):
+                                    if r_idx + target_offset < len(df_cpt_horiz):
+                                        sub_row = df_cpt_horiz.iloc[r_idx + target_offset]
+                                        
+                                        for c_idx in range(len(sub_row)):
+                                            tag = str(sub_row.iloc[c_idx]).strip().lower().replace("-", "")
+                                            
+                                            if tag in ["tf1", "tf2", "tf3", "tf4", "tf5"]:
+                                                try: flag_extracted[f"tf-{tag[-1]}"] = float(sub_row.iloc[c_idx + 1])
+                                                except (ValueError, TypeError): pass
+                                            elif tag in ["tc1", "tc2", "tc3"]:
+                                                try: flag_extracted[f"tc-{tag[-1]}"] = float(sub_row.iloc[c_idx + 1])
+                                                except (ValueError, TypeError): pass
+                                            elif "tvc" in tag:
+                                                try: tvc_accumulator.append(float(sub_row.iloc[c_idx + 1]))
+                                                except (ValueError, TypeError): pass
+                                            elif tag == "s2":
+                                                try: flag_extracted["S2"] = float(sub_row.iloc[c_idx + 1])
+                                                except (ValueError, TypeError): pass
+                                            elif tag == "sensor":
+                                                try: flag_extracted["Sensor"] = float(sub_row.iloc[c_idx + 2]) # Extract column 'Min'
+                                                except (ValueError, TypeError): pass
+                                
+                                if tvc_accumulator:
+                                    flag_extracted["tvc"] = round(sum(tvc_accumulator) / len(tvc_accumulator), 4)
+                                    
+                                if current_flag not in cpt_structured:
+                                    cpt_structured[current_flag] = {}
+                                # Mirror matrix configuration schemas so both "mean" and standard entries match historical runs
+                                cpt_structured[current_flag]["mean"] = flag_extracted
+                        
                         if cpt_structured:
                             parsed_successfully = True
-                    except Exception as block_err:
-                        st.error(f"Failed parsing summary-block matrix format: {str(block_err)}")
+                    except Exception as horiz_err:
+                        st.error(f"Failed parsing horizontal matrix format: {str(horiz_err)}")
 
                 # -------------------------------------------------------------
-                # 3. SAVE DATA MATRIX TO ENVIRONMENT STORAGE
+                # 3. SAVE DATA MATRIX TO STORAGE FOR SIMULATOR TRAINING
                 # -------------------------------------------------------------
                 if not parsed_successfully or not cpt_structured:
                     raise ValueError("CPT processing pipeline failed. The spreadsheet layout doesn't match known automation configurations.")
@@ -558,7 +552,7 @@ with tab2:
                 st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key] = st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key][-5:]
                 
                 save_memory(st.session_state.db)
-                st.success(f"📦 Paired Set saved into: {selected_volume} → {selected_arrangement}")
+                st.success(f"🚀 Model Simulator Trained successfully! Paired Set saved into: {selected_volume} → {selected_arrangement}")
                 st.rerun()
             except Exception as e:
                 st.error(f"Compilation error parsing dataset rows: {str(e)}")

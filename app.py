@@ -100,13 +100,17 @@ def verify_db_structure(vol, arr_name, p_amb, c_amb):
         st.session_state.db[vol][arr_name][p_amb][c_amb] = []
 
 # ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
-# 1. 📁 Volume Profile Manager Header & Active Model Dropdown
+# 1. 📁 Volume Profile Manager Header & Active Model Dropdown (Sorted Descending)
 st.sidebar.header("📁 Volume Profile Manager")
 existing_volumes = list(st.session_state.db.keys())
+
+# Sort models in descending order (e.g., 500L, 365L, 175L)
+if existing_volumes:
+    existing_volumes.sort(reverse=True)
 selected_volume = st.sidebar.selectbox("Active Refrigerator Model:", existing_volumes if existing_volumes else ["None"])
 
 # --- Delete Model Option ---
-if existing_volumes:
+if existing_volumes and selected_volume != "None":
     if st.sidebar.button("🗑️ Delete Selected Model", help="Permanently removes this model and all its arrangements"):
         del st.session_state.db[selected_volume]
         save_memory(st.session_state.db)
@@ -122,8 +126,11 @@ initial_arr = st.sidebar.text_input("Initial Arrangement Name:", placeholder="e.
 
 if st.sidebar.button("Add Volume Segment"):
     if new_vol and initial_arr:
+        # Clean inputs slightly to ensure consistent sorting behavior
+        new_vol = new_vol.strip()
+        initial_arr = initial_arr.strip()
+        
         if new_vol not in st.session_state.db:
-            # Create the model using your custom arrangement name instead of a generic default
             st.session_state.db[new_vol] = {initial_arr: {}}
             save_memory(st.session_state.db)
             st.success(f"Model {new_vol} initialized with arrangement {initial_arr}!")
@@ -140,6 +147,7 @@ st.sidebar.subheader("📐 Design Arrangements")
 new_arr = st.sidebar.text_input("➕ Create New Arrangement:", placeholder="e.g., A2")
 if st.sidebar.button("Register Arrangement"):
     if new_arr and selected_volume and selected_volume != "None":
+        new_arr = new_arr.strip()
         if selected_volume not in st.session_state.db or not isinstance(st.session_state.db[selected_volume], dict):
             st.session_state.db[selected_volume] = {}
         if new_arr not in st.session_state.db[selected_volume]:
@@ -148,13 +156,15 @@ if st.sidebar.button("Register Arrangement"):
             st.sidebar.success(f"Arrangement '{new_arr}' registered under {selected_volume}!")
             st.rerun()
 
-# 4. Ambient Arrangement Dropdown & Deletion
+# 4. Ambient Arrangement Dropdown & Deletion (Sorted Descending)
 if selected_volume and selected_volume in st.session_state.db and isinstance(st.session_state.db[selected_volume], dict):
     existing_arrangements = list(st.session_state.db[selected_volume].keys())
 else:
     existing_arrangements = []
 
 if existing_arrangements:
+    # Sort arrangements in descending order (e.g., A2, A1)
+    existing_arrangements.sort(reverse=True)
     selected_arrangement = st.sidebar.selectbox("Ambient Arrangement:", existing_arrangements)
     
     # --- Delete Arrangement Option ---

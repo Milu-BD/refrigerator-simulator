@@ -304,7 +304,7 @@ with tab2:
         if st.button("💾 Process and Save Report Pair to Memory Buffer", type="primary"):
             try:
                 # -------------------------------------------------------------
-                # 1. PARSE PULLDOWN DATA (NEW INTEGRATED FORMAT)
+                # 1. PARSE PULLDOWN DATA (ROBUST SINGLE DOOR LAB FORMAT)
                 # -------------------------------------------------------------
                 df_p_sum = pd.read_excel(repo_pulldown_file, sheet_name=0, header=None)
                 df_p_sum[0] = df_p_sum[0].astype(str).apply(normalize_sensor_name)
@@ -333,15 +333,17 @@ with tab2:
                 else:
                     p_extracted['tvc'] = 0.0
                     
+                # UNIVERSAL RULE: Always use minimum value for Sensor in pulldown if available, fallback to default
                 resolved_sensor = sheet_data.get('sensor', 0.0)
                 
                 # -------------------------------------------------------------
-                # 2. PARSE CPT DATA (WITH MULTI-FORMAT FAILSAFE)
+                # 2. PARSE CPT DATA (3-WAY CASCADE MULTI-FORMAT FAILSAFE)
                 # -------------------------------------------------------------
                 cpt_structured = {}
+                parsed_successfully = False
                 
+                # --- STRATEGY A: Original Standard Layout Sheet ('Report') ---
                 try:
-                    # Strategy A: Try parsing using your original 1st format layout
                     df_cpt = pd.read_excel(repo_cpt_file, sheet_name='Report', skiprows=8)
                     df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
                     
@@ -354,6 +356,7 @@ with tab2:
                         if current_flag not in cpt_structured:
                             cpt_structured[current_flag] = {}
                         if val_crit in metric_types:
+                            # Note: For Sensor we prioritize the min column if layout allows, here capturing standard
                             cpt_structured[current_flag][val_crit] = {
                                 "tf-1": float(r.iloc[3]), "tf-2": float(r.iloc[4]), "tf-3": float(r.iloc[5]),
                                 "tf-4": float(r.iloc[6]), "tf-5": float(r.iloc[7]), "tc-1": float(r.iloc[9]),
@@ -361,68 +364,133 @@ with tab2:
                                 "S2": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0,
                                 "Sensor": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0
                             }
+                    if cpt_structured:
+                        parsed_successfully = True
                 except Exception:
-                    # Strategy B: Fallback to the 2nd sheet layout format 
-                    # Reference Layout: "CPT _307L_-REV-0_F-11668_R027374_L12,P6_1.xlsx"
-                    df_cpt_alt = pd.read_excel(repo_cpt_file, sheet_name=1, header=None)
-                    
-                    row_10 = df_cpt_alt.iloc[10].astype(str).str.strip().str.lower().fillna("")
-                    row_11 = df_cpt_alt.iloc[11].astype(str).str.strip().str.lower().fillna("")
-                    
-                    combined_headers = []
-                    for r10, r11 in zip(row_10, row_11):
-                        lbl = r11 if r11 and r11 != "nan" else r10
-                        lbl = lbl.replace(" ", "").replace("-", "").replace("_", "")
-                        if "vc(" in lbl: lbl = "vc"
-                        if "sensor(" in lbl: lbl = "sensor"
-                        if "%rt" in lbl or "runtime%" in lbl or "runtime" == lbl: lbl = "runtime_pct"
-                        combined_headers.append(lbl)
+                    pass
+
+                # --- STRATEGY B: 2nd Sheet Multi-Row Header Format ("CPT _307L_...") ---
+                if not parsed_successfully:
+                    try:
+                        df_cpt_alt = pd.read_excel(repo_cpt_file, sheet_name=1, header=None)
+                        if df_cpt_alt.iloc[1].astype(str).str.contains("AVG-1").any() == False:
+                            # Verify it contains row layout features for Format 2
+                            row_10 = df_cpt_alt.iloc[10].astype(str).str.strip().str.lower().fillna("")
+                            row_11 = df_cpt_alt.iloc[11].astype(str).str.strip().str.lower().fillna("")
+                            
+                            combined_headers = []
+                            for r10, r11 in zip(row_10, row_11):
+                                lbl = r11 if r11 and r11 != "nan" else r10
+                                lbl = lbl.replace(" ", "").replace("-", "").replace("_", "")
+                                if "vc(" in lbl: lbl = "vc"
+                                if "sensor(" in lbl: lbl = "sensor"
+                                if "%rt" in lbl or "runtime%" in lbl or "runtime" == lbl: lbl = "runtime_pct"
+                                combined_headers.append(lbl)
+                                
+                            df_cpt_alt.columns = combined_headers
+                            df_data_rows = df_cpt_alt.iloc[12:].dropna(subset=["datacriteria"]).copy()
+                            
+                            current_flag = "Unknown"
+                            for _, row in df_data_rows.iterrows():
+                                val_f1 = str(row.iloc[0]).strip()
+                                val_crit = str(row.get("datacriteria", "")).strip().lower()
+                                
+                                if val_f1 and val_f1 != "nan" and val_f1 != current_flag:
+                                    current_flag = val_f1
+                                if current_flag not in cpt_structured:
+                                    cpt_structured[current_flag] = {}
+                                    
+                                try:
+                                    rt_val = float(row.get("runtime_pct", 0.0))
+                                  except (ValueError, TypeError):
+                                    rt_val = 0.0
+                                    
+                                if rt_val == 100:
+                                    continue
+                                    
+                                if val_crit in ["mean", "avg", "average"]:
+                                    cpt_structured[current_flag][val_crit] = {
+                                        "tf-1": float(row.get("tf1", 0.0)),
+                                        "tf-2": float(row.get("tf2", 0.0)),
+                                        "tf-3": float(row.get("tf3", 0.0)),
+                                        "tf-4": float(row.get("tf4", 0.0)),
+                                        "tf-5": float(row.get("tf5", 0.0)),
+                                        "tc-1": float(row.get("tc1", 0.0)),
+                                        "tc-2": float(row.get("tc2", 0.0)),
+                                        "tc-3": float(row.get("tc3", 0.0)),
+                                        "tvc":  float(row.get("vc", 0.0)),
+                                        "S2":   float(row.get("s2", 0.0)),
+                                        "Sensor": float(row.get("sensor", 0.0)) # For Format 2 standard lookup
+                                    }
+                            if cpt_structured:
+                                parsed_successfully = True
+                    except Exception:
+                        pass
+
+                # --- STRATEGY C: Section Layout Matrix Format ("F-11666_R027963_L12 Print event.xlsx") ---
+                if not parsed_successfully:
+                    try:
+                        # Read the sheet directly, parse segmented thermostat level groups
+                        df_cpt_seg = pd.read_excel(repo_cpt_file, sheet_name=0, header=None)
                         
-                    df_cpt_alt.columns = combined_headers
-                    df_data_rows = df_cpt_alt.iloc[12:].dropna(subset=["datacriteria"]).copy()
-                    
-                    current_flag = "Unknown"
-                    for _, row in df_data_rows.iterrows():
-                        val_f1 = str(row.iloc[0]).strip()
-                        val_crit = str(row.get("datacriteria", "")).strip().lower()
-                        
-                        if val_f1 and val_f1 != "nan" and val_f1 != current_flag:
-                            current_flag = val_f1
+                        current_flag = "Unknown"
+                        for idx, r in df_cpt_seg.iterrows():
+                            val_0 = str(r.iloc[0]).strip()
                             
-                        if current_flag not in cpt_structured:
-                            cpt_structured[current_flag] = {}
-                            
-                        # Universal Skip-Rule check
-                        try:
-                            rt_val = float(row.get("runtime_pct", 0.0))
-                        except (ValueError, TypeError):
-                            rt_val = 0.0
-                            
-                        # UNIVERSAL SKIP-RULE: If Run Time % == 100, skip parsing core data for this row
-                        if rt_val == 100:
-                            continue
-                            
-                        if val_crit in ["mean", "avg", "average"]:
-                            try:
-                                cpt_structured[current_flag][val_crit] = {
-                                    "tf-1": float(row.get("tf1", 0.0)),
-                                    "tf-2": float(row.get("tf2", 0.0)),
-                                    "tf-3": float(row.get("tf3", 0.0)),
-                                    "tf-4": float(row.get("tf4", 0.0)),
-                                    "tf-5": float(row.get("tf5", 0.0)),
-                                    "tc-1": float(row.get("tc1", 0.0)),
-                                    "tc-2": float(row.get("tc2", 0.0)),
-                                    "tc-3": float(row.get("tc3", 0.0)),
-                                    "tvc":  float(row.get("vc", 0.0)),
-                                    "S2":   float(row.get("s2", 0.0)),
-                                    "Sensor": float(row.get("sensor", 0.0))
-                                }
-                            except (ValueError, TypeError):
+                            # Detect section header strings dynamically (e.g., Level-2, Level-1, Level-3)
+                            if pd.notna(r.iloc[0]) and ("level" in val_0.lower() or "boost" in val_0.lower()):
+                                current_flag = val_0
+                                if current_flag not in cpt_structured:
+                                    cpt_structured[current_flag] = {"mean": {}}
                                 continue
+                                
+                            # Skip row design header blocks containing structural text criteria names
+                            if val_0.lower() in ["section", "min", "nan", ""] or pd.isna(r.iloc[0]):
+                                continue
+                                
+                            # Normalize target element tags
+                            clean_tag = normalize_sensor_name(val_0)
+                            
+                            if current_flag != "Unknown":
+                                # UNIVERSAL RULE: Always use MIN value (Index 1 or Last Min Index 5) for Sensor
+                                if clean_tag == "sensor":
+                                    try:
+                                        cpt_structured[current_flag]["mean"]["Sensor"] = float(r.iloc[5])
+                                    except (ValueError, TypeError, IndexError):
+                                        cpt_structured[current_flag]["mean"]["Sensor"] = float(r.iloc[1])
+                                        
+                                # Track standard thermocouple parameters mapping from the last AVG-2 block (Index 8)
+                                else:
+                                    # Handle individual and sub-composite averaging structures
+                                    mapping_dict = {
+                                        "tf1": "tf-1", "tf2": "tf-2", "tf3": "tf-3", "tf4": "tf-4", "tf5": "tf-5",
+                                        "tc1": "tc-1", "tc2": "tc-2", "tc3": "tc-3", "s2": "S2"
+                                    }
+                                    
+                                    if clean_tag in mapping_dict:
+                                        cpt_structured[current_flag]["mean"][mapping_dict[clean_tag]] = float(r.iloc[8])
+                                    elif "tvc" in clean_tag:
+                                        # Track individual tvc elements to take the final average parameter value
+                                        if "tvc_vals" not in cpt_structured[current_flag]:
+                                            cpt_structured[current_flag]["tvc_vals"] = []
+                                        cpt_structured[current_flag]["tvc_vals"].append(float(r.iloc[8]))
+
+                        # Finalize composite calculations for the segmented structure rows
+                        for flg in cpt_structured:
+                            if "tvc_vals" in cpt_structured[flg] and cpt_structured[flg]["tvc_vals"]:
+                                cpt_structured[flg]["mean"]["tvc"] = round(sum(cpt_structured[flg]["tvc_vals"]) / len(cpt_structured[flg]["tvc_vals"]), 4)
+                                del cpt_structured[flg]["tvc_vals"]
+                                
+                        parsed_successfully = True
+                    except Exception as seg_err:
+                        st.error(f"Failed parsing section layout format: {str(seg_err)}")
 
                 # -------------------------------------------------------------
-                # 3. SAVE TO DATABASE PIPELINE
+                # 3. SAVE DATA MATRIX TO ENVIRONMENT STORAGE
                 # -------------------------------------------------------------
+                if not parsed_successfully or not cpt_structured:
+                    raise ValueError("CPT processing pipeline failed. The spreadsheet layout doesn't match known automation configurations.")
+
                 new_block = {"pulldown_data": p_extracted, "pulldown_baseline_sensor": resolved_sensor, "cpt_data": cpt_structured}
                 
                 verify_db_structure(selected_volume, selected_arrangement, p_repo_key, c_repo_key)

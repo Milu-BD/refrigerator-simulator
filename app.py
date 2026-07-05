@@ -100,13 +100,11 @@ def verify_db_structure(vol, arr_name, p_amb, c_amb):
         st.session_state.db[vol][arr_name][p_amb][c_amb] = []
 
 # ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
-# Initialize empty string state variables for inputs if they don't exist yet
-if "input_new_vol" not in st.session_state:
-    st.session_state.input_new_vol = ""
-if "input_initial_arr" not in st.session_state:
-    st.session_state.input_initial_arr = ""
-if "input_new_arr" not in st.session_state:
-    st.session_state.input_new_arr = ""
+# Core state keys for managing widget reset cycles cleanly
+if "reset_model_inputs" not in st.session_state:
+    st.session_state.reset_model_inputs = False
+if "reset_arr_input" not in st.session_state:
+    st.session_state.reset_arr_input = False
 
 # 1. 📁 Volume Profile Manager Header & Active Model Dropdown (Sorted Ascending)
 st.sidebar.header("📁 Volume Profile Manager")
@@ -128,8 +126,17 @@ st.sidebar.markdown("---")
 
 # 2. ➕ Register New Volume Model Form (Forces an initial Arrangement Name)
 st.sidebar.subheader("➕ Register New Volume Model")
-new_vol = st.sidebar.text_input("New Model Name:", placeholder="e.g., 365L", key="input_new_vol")
-initial_arr = st.sidebar.text_input("Initial Arrangement Name:", placeholder="e.g., A1", key="input_initial_arr")
+
+# Dynamic state control to force empty string values safely on submission loops
+val_new_vol = "" if st.session_state.reset_model_inputs else None
+val_init_arr = "" if st.session_state.reset_model_inputs else None
+
+new_vol = st.sidebar.text_input("New Model Name:", value=val_new_vol, placeholder="e.g., 365L", key="input_new_vol_raw")
+initial_arr = st.sidebar.text_input("Initial Arrangement Name:", value=val_init_arr, placeholder="e.g., A1", key="input_initial_arr_raw")
+
+# Turn off the clearing flag state safely
+if st.session_state.reset_model_inputs:
+    st.session_state.reset_model_inputs = False
 
 if st.sidebar.button("Add Volume Segment"):
     if new_vol and initial_arr:
@@ -141,9 +148,8 @@ if st.sidebar.button("Add Volume Segment"):
             save_memory(st.session_state.db)
             st.success(f"Model {new_vol_clean} initialized with arrangement {initial_arr_clean}!")
             
-            # CLEAR CELLS: Wipe state variables before rerun
-            st.session_state.input_new_vol = ""
-            st.session_state.input_initial_arr = ""
+            # SIGNAL CLEAR: Toggle trigger to force blank fields on refresh
+            st.session_state.reset_model_inputs = True
             st.rerun()
         else:
             st.sidebar.error("This model name already exists.")
@@ -154,7 +160,14 @@ st.sidebar.markdown("---")
 
 # 3. ➕ Create New Arrangement Inputs
 st.sidebar.subheader("📐 Design Arrangements")
-new_arr = st.sidebar.text_input("➕ Create New Arrangement:", placeholder="e.g., A2", key="input_new_arr")
+
+val_new_arr = "" if st.session_state.reset_arr_input else None
+new_arr = st.sidebar.text_input("➕ Create New Arrangement:", value=val_new_arr, placeholder="e.g., A2", key="input_new_arr_raw")
+
+# Turn off arrangement clear flag state safely
+if st.session_state.reset_arr_input:
+    st.session_state.reset_arr_input = False
+
 if st.sidebar.button("Register Arrangement"):
     if new_arr and selected_volume and selected_volume != "None":
         new_arr_clean = new_arr.strip()
@@ -165,8 +178,8 @@ if st.sidebar.button("Register Arrangement"):
             save_memory(st.session_state.db)
             st.sidebar.success(f"Arrangement '{new_arr_clean}' registered under {selected_volume}!")
             
-            # CLEAR CELL: Wipe single arrangement input field state variable
-            st.session_state.input_new_arr = ""
+            # SIGNAL CLEAR: Set arrangement trigger flag to reset cell block
+            st.session_state.reset_arr_input = True
             st.rerun()
 
 # 4. Ambient Arrangement Dropdown & Deletion (Sorted Ascending)

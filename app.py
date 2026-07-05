@@ -100,11 +100,11 @@ def verify_db_structure(vol, arr_name, p_amb, c_amb):
         st.session_state.db[vol][arr_name][p_amb][c_amb] = []
 
 # ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
-# Core state keys for managing widget reset cycles cleanly
-if "reset_model_inputs" not in st.session_state:
-    st.session_state.reset_model_inputs = False
-if "reset_arr_input" not in st.session_state:
-    st.session_state.reset_arr_input = False
+# Initialize unique tracking IDs for clearing inputs if they don't exist
+if "model_form_id" not in st.session_state:
+    st.session_state.model_form_id = 0
+if "arr_form_id" not in st.session_state:
+    st.session_state.arr_form_id = 1000
 
 # 1. 📁 Volume Profile Manager Header & Active Model Dropdown (Sorted Ascending)
 st.sidebar.header("📁 Volume Profile Manager")
@@ -127,16 +127,9 @@ st.sidebar.markdown("---")
 # 2. ➕ Register New Volume Model Form (Forces an initial Arrangement Name)
 st.sidebar.subheader("➕ Register New Volume Model")
 
-# Dynamic state control to force empty string values safely on submission loops
-val_new_vol = "" if st.session_state.reset_model_inputs else None
-val_init_arr = "" if st.session_state.reset_model_inputs else None
-
-new_vol = st.sidebar.text_input("New Model Name:", value=val_new_vol, placeholder="e.g., 365L", key="input_new_vol_raw")
-initial_arr = st.sidebar.text_input("Initial Arrangement Name:", value=val_init_arr, placeholder="e.g., A1", key="input_initial_arr_raw")
-
-# Turn off the clearing flag state safely
-if st.session_state.reset_model_inputs:
-    st.session_state.reset_model_inputs = False
+# Using a dynamic key suffix ensures the cells clear completely upon submission
+new_vol = st.sidebar.text_input("New Model Name:", placeholder="e.g., 365L", key=f"input_vol_{st.session_state.model_form_id}")
+initial_arr = st.sidebar.text_input("Initial Arrangement Name:", placeholder="e.g., A1", key=f"input_init_{st.session_state.model_form_id}")
 
 if st.sidebar.button("Add Volume Segment"):
     if new_vol and initial_arr:
@@ -148,8 +141,8 @@ if st.sidebar.button("Add Volume Segment"):
             save_memory(st.session_state.db)
             st.success(f"Model {new_vol_clean} initialized with arrangement {initial_arr_clean}!")
             
-            # SIGNAL CLEAR: Toggle trigger to force blank fields on refresh
-            st.session_state.reset_model_inputs = True
+            # FORCE CELL CLEAR: Increment the form ID to reset input boxes
+            st.session_state.model_form_id += 1
             st.rerun()
         else:
             st.sidebar.error("This model name already exists.")
@@ -161,12 +154,7 @@ st.sidebar.markdown("---")
 # 3. ➕ Create New Arrangement Inputs
 st.sidebar.subheader("📐 Design Arrangements")
 
-val_new_arr = "" if st.session_state.reset_arr_input else None
-new_arr = st.sidebar.text_input("➕ Create New Arrangement:", value=val_new_arr, placeholder="e.g., A2", key="input_new_arr_raw")
-
-# Turn off arrangement clear flag state safely
-if st.session_state.reset_arr_input:
-    st.session_state.reset_arr_input = False
+new_arr = st.sidebar.text_input("➕ Create New Arrangement:", placeholder="e.g., A2", key=f"input_arr_{st.session_state.arr_form_id}")
 
 if st.sidebar.button("Register Arrangement"):
     if new_arr and selected_volume and selected_volume != "None":
@@ -178,8 +166,8 @@ if st.sidebar.button("Register Arrangement"):
             save_memory(st.session_state.db)
             st.sidebar.success(f"Arrangement '{new_arr_clean}' registered under {selected_volume}!")
             
-            # SIGNAL CLEAR: Set arrangement trigger flag to reset cell block
-            st.session_state.reset_arr_input = True
+            # FORCE CELL CLEAR: Increment the arrangement form ID to reset input box
+            st.session_state.arr_form_id += 1
             st.rerun()
 
 # 4. Ambient Arrangement Dropdown & Deletion (Sorted Ascending)
@@ -207,7 +195,6 @@ else:
 
 # === RESTORED TAB DEFINITIONS ===
 tab1, tab2, tab3 = st.tabs(["🎛️ Run Automated Simulator", "🛠️ Data Repository Room", "🔍 Reviewer Dashboard"])
-
 # ================= TAB 1: RUN AUTOMATED SIMULATOR =================
 with tab1:
     st.subheader(f"Predict Multilevel CPT Matrices for [{selected_volume}] ({selected_arrangement})")

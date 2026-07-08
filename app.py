@@ -488,7 +488,7 @@ with tab2:
                         if cpt_structured: parsed_successfully = True
                     except Exception: pass
 
-                # --- STRATEGY E: Horizontal Wide Matrix Block Format ("CPT_307L_-REV-0...") ---
+                # --- STRATEGY E: Horizontal Wide Matrix Block Format ---
                 if not parsed_successfully:
                     try:
                         df_cpt_horiz = pd.read_excel(repo_cpt_file, sheet_name=0, header=None)
@@ -502,7 +502,6 @@ with tab2:
                                 }
                                 tvc_accumulator = []
                                 
-                                # Process the 10 data matrix rows underneath the flag header row
                                 for target_offset in range(1, 11):
                                     if r_idx + target_offset < len(df_cpt_horiz):
                                         sub_row = df_cpt_horiz.iloc[r_idx + target_offset]
@@ -523,7 +522,7 @@ with tab2:
                                                 try: flag_extracted["S2"] = float(sub_row.iloc[c_idx + 1])
                                                 except (ValueError, TypeError): pass
                                             elif tag == "sensor":
-                                                try: flag_extracted["Sensor"] = float(sub_row.iloc[c_idx + 2]) # Extract column 'Min'
+                                                try: flag_extracted["Sensor"] = float(sub_row.iloc[c_idx + 2])
                                                 except (ValueError, TypeError): pass
                                 
                                 if tvc_accumulator:
@@ -531,16 +530,13 @@ with tab2:
                                     
                                 if current_flag not in cpt_structured:
                                     cpt_structured[current_flag] = {}
-                                # Mirror matrix configuration schemas so both "mean" and standard entries match historical runs
                                 cpt_structured[current_flag]["mean"] = flag_extracted
                         
-                        if cpt_structured:
-                            parsed_successfully = True
-                    except Exception as horiz_err:
-                        st.error(f"Failed parsing horizontal matrix format: {str(horiz_err)}")
+                        if cpt_structured: parsed_successfully = True
+                    except Exception: pass
 
                 # -------------------------------------------------------------
-                # 3. SAVE DATA MATRIX TO STORAGE FOR SIMULATOR TRAINING
+                # 3. SAVE DATA MATRIX TO STORAGE (EXPANDED TO LAST 10 SETS)
                 # -------------------------------------------------------------
                 if not parsed_successfully or not cpt_structured:
                     raise ValueError("CPT processing pipeline failed. The spreadsheet layout doesn't match known automation configurations.")
@@ -549,10 +545,12 @@ with tab2:
                 
                 verify_db_structure(selected_volume, selected_arrangement, p_repo_key, c_repo_key)
                 st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key].append(new_block)
-                st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key] = st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key][-5:]
+                
+                # Slicing updated from [-5:] to [-10:] to track up to 10 parsed dataset histories
+                st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key] = st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key][-10:]
                 
                 save_memory(st.session_state.db)
-                st.success(f"🚀 Model Simulator Trained successfully! Paired Set saved into: {selected_volume} → {selected_arrangement}")
+                st.success(f"🚀 Model Simulator Trained successfully! Memory capacity expanded to capture up to 10 pairs.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Compilation error parsing dataset rows: {str(e)}")

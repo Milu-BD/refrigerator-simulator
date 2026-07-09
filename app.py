@@ -1,498 +1,201 @@
-import json
+# ==============================================================================
+# BLOCK 1: CORE INITIALIZATION, SIMULATOR CACHING & HARDWARE CONSTANTS
+# Function: Sets up global parameters, default dictionaries, and file serialization.
+# ==============================================================================
 import os
-import numpy as np
+import pickle
 import pandas as pd
-from sklearn.neighbors import KNeighborsRegressor
 import streamlit as st
 
-# Must be the absolute first Streamlit command in the script
-st.set_page_config(page_title="Refrigerator Simulator Hub", layout="wide")
+# Configure page metadata
+st.set_page_config(page_title="OQC Lab Thermal Simulator Engine", layout="wide")
 
-# =================================================================
-# 1. HARD DISK PERSISTENCE LAYER
-# =================================================================
-STORAGE_FILE = "simulator_storage.json"
-REVIEWER_PASSWORD = "Admin@Cooling2026"
+# Lab Environment and Target Appliance Configurations
+VOLUME_OPTIONS = ["175L Single Door", "200L Single Door", "220L Double Door"]
+ARRANGEMENT_OPTIONS = ["Standard Chiller", "Modified Thermostat Capillary (Post-2021)"]
+REVIEWER_PASSWORD = "OQC_LAB_ADMIN_SECURE"
+
+metric_types = ["mean", "avg", "average"]
+
+# Default schema structure for the database memory matrix
+def get_empty_db_schema():
+    return {
+        vol: {
+            arr: {
+                p_amb: {c_amb: [] for c_amb in ["16C", "32C", "43C"]}
+                for p_amb in ["32C", "43C"]
+            } for arr in ARRANGEMENT_OPTIONS
+        } for vol in VOLUME_OPTIONS
+    }
+
+DB_FILE_PATH = "simulator_memory_buffer.pkl"
 
 def load_memory_from_disk():
-    """Reads saved database matrix from local disk storage on startup."""
-    if os.path.exists(STORAGE_FILE):
+    if os.path.exists(DB_FILE_PATH):
         try:
-            with open(STORAGE_FILE, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            st.error(f"⚠️ Error loading backup database file: {str(e)}")
-    return {}
+            with open(DB_FILE_PATH, "rb") as f:
+                return pickle.load(f)
+        except Exception:
+            return get_empty_db_schema()
+    return get_empty_db_schema()
 
 def save_memory_to_disk(db_matrix):
-    """Writes the current database matrix to local disk storage instantly."""
     try:
-        with open(STORAGE_FILE, "w") as f:
-            json.dump(db_matrix, f, indent=4)
+        with open(DB_FILE_PATH, "wb") as f:
+            pickle.dump(db_matrix, f)
     except Exception as e:
-        st.error(f"⚠️ Failed to write backup data to disk: {str(e)}")
+        st.error(f"Critical System Error: Hard-disk backup serialization failed: {str(e)}")
 
-# Legacy compatibility wrapper in case it's explicitly called later in your file
-def save_memory(data):
-    save_memory_to_disk(data)
-
-# =================================================================
-# 2. STATE INITIALIZATION ON STARTUP
-# =================================================================
+# Ensure session states exist
 if "db" not in st.session_state:
     st.session_state.db = load_memory_from_disk()
-
-if 'reviewer_logged_in' not in st.session_state:
+if "p_file_key" not in st.session_state:
+    st.session_state.p_file_key = 100
+if "cpt_file_key" not in st.session_state:
+    st.session_state.cpt_file_key = 500
+if "reviewer_logged_in" not in st.session_state:
     st.session_state.reviewer_logged_in = False
 
-# Global configuration constants
-tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', 'tvc', 'S2']
-metric_types = ['mean', 'min', 'max', '(max+min)/2']
-
-# =================================================================
-# 3. UTILITY HELPER FUNCTIONS
-# =================================================================
-def normalize_sensor_name(name):
-    if not isinstance(name, str):
-        return ""
-    # Lowercase, remove hyphens, spaces, and underscores (e.g., "tf-1" -> "tf1")
-    return name.lower().replace(" ", "").replace("-", "").replace("_", "").strip()
-
-# Helper initialization to safeguard nested multi-arrangement structure
-def verify_db_structure(vol, arr_name, p_amb, c_amb):
-    if vol not in st.session_state.db or not isinstance(st.session_state.db[vol], dict):
+def verify_db_structure(vol, arr, p_amb, c_amb):
+    if vol not in st.session_state.db:
         st.session_state.db[vol] = {}
-    
-    # Catch old layouts or non-existent arrangements
-    if arr_name not in st.session_state.db[vol] or not isinstance(st.session_state.db[vol][arr_name], dict):
-        st.session_state.db[vol][arr_name] = {}
-        
-    if p_amb not in st.session_state.db[vol][arr_name] or not isinstance(st.session_state.db[vol][arr_name][p_amb], dict):
-        st.session_state.db[vol][arr_name][p_amb] = {}
-        
-    if c_amb not in st.session_state.db[vol][arr_name][p_amb]:
-        st.session_state.db[vol][arr_name][p_amb][c_amb] = []
+    if arr not in st.session_state.db[vol]:
+        st.session_state.db[vol][arr] = {}
+    if p_amb not in st.session_state.db[vol][arr]:
+        st.session_state.db[vol][arr][p_amb] = {}
+    if c_amb not in st.session_state.db[vol][arr][p_amb]:
+        st.session_state.db[vol][arr][p_amb][c_amb] = []
 
-# =================================================================
-# 4. ADVANCED INTERPOLATION ENGINE
-# =================================================================
-def run_automated_simulation(volume_records, new_pulldown, target_sensors):
-    results_map = {}
-    if not volume_records:
-        return results_map
-        
-    for idx, target_s in enumerate(target_sensors):
-        predicted_modes = []
-        all_flags = set()
-        for record in volume_records:
-            for flag in record['cpt_data'].keys():
-                all_flags.add(flag)
-                
-        for flag in sorted(all_flags):
-            for metric in metric_types:
-                X_train, y_train = [], []
-                
-                for record in volume_records:
-                    if flag not in record['cpt_data'] or metric not in record['cpt_data'][flag]:
-                        continue
-                    
-                    p_base = [record['pulldown_data'].get(f, 0.0) for f in tc_features] + [record['pulldown_baseline_sensor']]
-                    outputs = record['cpt_data'][flag][metric]
-                    y_vector = [outputs.get(f, 0.0) for f in tc_features] + [outputs.get('S2', 0.0), outputs.get('Sensor', 0.0)]
-                    
-                    X_train.append(p_base)
-                    y_train.append(y_vector)
-                
-                if len(X_train) >= 1:
-                    knn = KNeighborsRegressor(n_neighbors=min(2, len(X_train)), weights='distance')
-                    knn.fit(X_train, y_train)
-                    
-                    query_vector = np.array(new_pulldown + [target_s]).reshape(1, -1)
-                    prediction = knn.predict(query_vector)[0]
-                    
-                    row = {
-                        "TestFlag": flag,
-                        "Data Criteria": metric,
-                        "tf-1": round(prediction[0], 2), "tf-2": round(prediction[1], 2),
-                        "tf-3": round(prediction[2], 2), "tf-4": round(prediction[3], 2),
-                        "tf-5": round(prediction[4], 2), "tc-1": round(prediction[5], 2),
-                        "tc-2": round(prediction[6], 2), "tc-3": round(prediction[7], 2),
-                        "tvc": round(prediction[8], 2),  "S2": round(prediction[9], 2),
-                        "Sensor": round(prediction[10], 2)
-                    }
-                    predicted_modes.append(row)
-                    
-        if predicted_modes:
-            results_map[f"Target Sensor Set {idx+1} ({target_s}°C)"] = pd.DataFrame(predicted_modes)
-            
-    return results_map
+# ==============================================================================
+# BLOCK 2: UTILITY TEXT-PARSERS & INTERPOLATION NUMERICAL MATHEMATICS
+# Function: Data cleaning strings and execution logic for continuous regression loops.
+# ==============================================================================
+def normalize_sensor_name(name):
+    """Normalizes variation in sensor notation from automated loggers."""
+    if pd.isna(name):
+        return ""
+    s = str(name).strip().lower().replace("-", "").replace("_", "").replace(" ", "")
+    if "tf" in s: return s
+    if "tc" in s: return s
+    if "s2" in s: return "s2"
+    if "sensor" in s: return "sensor"
+    if "tvc" in s: return s
+    return s
 
-
-# =================================================================
-# 5. STREAMLIT USER INTERFACE (TABS) & REPOSITORY LOGIC
-# =================================================================
-
-# Create your layout tabs first
-tab1, tab2, tab3 = st.tabs(["Simulation Hub", "Data Repository Room", "Analytics"])
-
-with tab2:
-    st.header("Data Repository Room")
-    
-    # Initialize target structure dictionary and tracking status cleanly first
-    cpt_structured = {}
-    parsed_successfully = False
-    
-    # --- STEP 1: RENDER THE FILE UPLOADER FIRST ---
-    repo_cpt_file = st.file_uploader(
-        "Upload CPT Calculation Report (Excel)", 
-        type=["xlsx", "xls"],
-        key=st.session_state.cpt_file_key
-    )
-    
-    # --- STEP 2: RUN STRATEGY A *ONLY* IF A FILE IS PRESENT ---
-    if repo_cpt_file is not None:
-        try:
-            import openpyxl  
-            import pandas as pd
-
-            # Helper to handle cell parsing safely
-            def to_float(val):
-                try:
-                    if pd.isna(val) or str(val).strip().lower() in ['nan', '']:
-                        return 0.0
-                    return float(str(val).strip())
-                except (ValueError, TypeError):
-                    return 0.0
-
-            # 1. Open the file natively using openpyxl to check row visibility states
-            wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
-            
-            # Target the layout sheet safely
-            sheet_name = 'CPT CALCULATION REPORT' if 'CPT CALCULATION REPORT' in wb.sheetnames else wb.sheetnames[0]
-            ws = wb[sheet_name]
-            
-            # 2. Extract data into standard pandas format while filtering hidden rows
-            visible_rows = []
-            for r_idx, row in enumerate(ws.iter_rows(values_only=False), start=1):
-                if ws.row_dimensions[r_idx].hidden:
-                    continue
-                    
-                row_values = [cell.value for cell in row]
-                visible_rows.append(row_values)
-                
-            # 3. Convert only the visible rows into your processing DataFrame
-            df_cpt = pd.DataFrame(visible_rows)
-            
-            # After stripping hidden rows, rows 1-8 are skipped, meaning index 8 onwards contains the actual report
-            df_cpt = df_cpt.iloc[8:] 
-            df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
-            
-            current_flag = "Unknown"
-            for _, r in df_cpt.iterrows():
-                val_f1 = str(r.iloc[0]).strip()           # Th Knob is in column A (0)
-                val_crit = str(r.iloc[1]).strip().lower() # Data Criteria is in column B (1)
-                
-                # Forward-fill the test flag context (e.g., level-5)
-                if val_f1 and val_f1 != 'nan' and val_f1 != current_flag:
-                    current_flag = val_f1
-                    
-                if current_flag not in cpt_structured:
-                    cpt_structured[current_flag] = {}
-                    
-                if val_crit in metric_types:
-                    cpt_structured[current_flag][val_crit] = {
-                        "tf-1": to_float(r.iloc[2]),   # Col C
-                        "tf-2": to_float(r.iloc[3]),   # Col D
-                        "tf-3": to_float(r.iloc[4]),   # Col E
-                        "tf-4": to_float(r.iloc[5]),   # Col F
-                        "tf-5": to_float(r.iloc[6]),   # Col G
-                        "tc-1": to_float(r.iloc[12]),  # Col M
-                        "tc-2": to_float(r.iloc[13]),  # Col N
-                        "tc-3": to_float(r.iloc[14]),  # Col O
-                        "tvc":  to_float(r.iloc[16]),  # Col Q (VC)
-                        "S2":   to_float(r.iloc[19]),  # Col T (S2)
-                        "Sensor": to_float(r.iloc[17]) # Col R (Sensor)
-                    }
-                    
-            if cpt_structured: 
-                parsed_successfully = True
-                st.success("✅ Excel data parsed successfully using Strategy A!")
-
-        except Exception as e: 
-            st.error(f"Debug Info Strategy A Error: {str(e)}")
-            
-    else:
-        # If no file is loaded, show info and block processing downward execution errors
-        st.info("💡 Please upload an Excel sheet to parse data coordinates.")
-
-
-# ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
-# Initialize unique tracking IDs for clearing inputs if they don't exist
-if "model_form_id" not in st.session_state:
-    st.session_state.model_form_id = 0
-if "arr_form_id" not in st.session_state:
-    st.session_state.arr_form_id = 1000
-
-# ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
-# Initialize unique tracking IDs for clearing inputs if they don't exist
-if "model_form_id" not in st.session_state:
-    st.session_state.model_form_id = 0
-if "arr_form_id" not in st.session_state:
-    st.session_state.arr_form_id = 1000
-
-# 1. 📁 Volume Profile Manager Header & Active Model Dropdown (Sorted Ascending)
-st.sidebar.header("📁 Volume Profile Manager")
-existing_volumes = list(st.session_state.db.keys())
-
-if existing_volumes:
-    existing_volumes.sort(reverse=False)
-selected_volume = st.sidebar.selectbox("Active Refrigerator Model:", existing_volumes if existing_volumes else ["None"])
-
-# --- Delete Model Option (Fixed Overlap) ---
-if existing_volumes and selected_volume != "None":
-    st.sidebar.caption("⚠️ Permanently removes this model and all its arrangements")
-    if st.sidebar.button("🗑️ Delete Selected Model"):
-        del st.session_state.db[selected_volume]
-        save_memory(st.session_state.db)
-        st.sidebar.warning(f"Model '{selected_volume}' deleted.")
-        st.rerun()
-
-st.sidebar.markdown("---")
-
-# 2. Select Arrangement of Selected Volume & Deletion (Sorted Ascending)
-if selected_volume and selected_volume in st.session_state.db and isinstance(st.session_state.db[selected_volume], dict):
-    existing_arrangements = list(st.session_state.db[selected_volume].keys())
-else:
-    existing_arrangements = []
-
-if existing_arrangements:
-    existing_arrangements.sort(reverse=False)
-    # Renamed the label exactly as requested
-    selected_arrangement = st.sidebar.selectbox("Select Arrangement of Selected Volume:", existing_arrangements)
-    
-    # --- Delete Arrangement Option (Fixed Overlap) ---
-    st.sidebar.caption("⚠️ Removes this arrangement data only")
-    if st.sidebar.button("🗑️ Delete Selected Arrangement"):
-        if len(existing_arrangements) > 1:
-            del st.session_state.db[selected_volume][selected_arrangement]
-            save_memory(st.session_state.db)
-            st.sidebar.warning(f"Arrangement '{selected_arrangement}' deleted.")
-            st.rerun()
-        else:
-            st.sidebar.error("❌ Cannot delete the last remaining arrangement. A model must have at least one arrangement layout. Delete the entire model instead.")
-else:
-    selected_arrangement = "None"
-    st.sidebar.caption("No arrangements found. Register one below.")
-
-st.sidebar.markdown("---")
-
-# 3. ➕ Create New Arrangement Inputs
-st.sidebar.subheader("📐 Design Arrangements")
-new_arr = st.sidebar.text_input("➕ Create New Arrangement:", placeholder="e.g., A2", key=f"input_arr_{st.session_state.arr_form_id}")
-
-if st.sidebar.button("Register Arrangement"):
-    if new_arr and selected_volume and selected_volume != "None":
-        new_arr_clean = new_arr.strip()
-        if selected_volume not in st.session_state.db or not isinstance(st.session_state.db[selected_volume], dict):
-            st.session_state.db[selected_volume] = {}
-        if new_arr_clean not in st.session_state.db[selected_volume]:
-            st.session_state.db[selected_volume][new_arr_clean] = {}
-            save_memory(st.session_state.db)
-            st.sidebar.success(f"Arrangement '{new_arr_clean}' registered under {selected_volume}!")
-            
-            # FORCE CELL CLEAR: Increment the arrangement form ID to reset input box
-            st.session_state.arr_form_id += 1
-            st.rerun()
-
-st.sidebar.markdown("---")
-
-# 4. ➕ Register New Volume Model Form (Moved to the end of the sidebar)
-st.sidebar.subheader("➕ Register New Volume Model")
-new_vol = st.sidebar.text_input("New Model Name:", placeholder="e.g., 365L", key=f"input_vol_{st.session_state.model_form_id}")
-initial_arr = st.sidebar.text_input("Initial Arrangement Name:", placeholder="e.g., A1", key=f"input_init_{st.session_state.model_form_id}")
-
-if st.sidebar.button("Add Volume Segment"):
-    if new_vol and initial_arr:
-        new_vol_clean = new_vol.strip()
-        initial_arr_clean = initial_arr.strip()
-        
-        if new_vol_clean not in st.session_state.db:
-            st.session_state.db[new_vol_clean] = {initial_arr_clean: {}}
-            save_memory(st.session_state.db)
-            st.success(f"Model {new_vol_clean} initialized with arrangement {initial_arr_clean}!")
-            
-            # FORCE CELL CLEAR: Increment the form ID to reset input boxes
-            st.session_state.model_form_id += 1
-            st.rerun()
-        else:
-            st.sidebar.error("This model name already exists.")
-    elif new_vol or initial_arr:
-        st.sidebar.error("⚠️ You must provide both the Model Name AND the Initial Arrangement Name.")
-
-
-# === RESTORED TAB DEFINITIONS ===
-tab1, tab2, tab3 = st.tabs(["🎛️ Run Automated Simulator", "🛠️ Data Repository Room", "🔍 Reviewer Dashboard"])
-
-# ================= TAB 1: RUN AUTOMATED SIMULATOR =================
-with tab1:
-    st.subheader(f"Predict Multilevel CPT Matrices for [{selected_volume}] ({selected_arrangement})")
-    
-    c1, c2 = st.columns(2)
-    with c1:
-        sim_p_ambient = st.selectbox("Select Target Pulldown Ambient:", ["32°C", "43°C"], key="sim_p_amb")
-    with c2:
-        sim_c_ambient = st.selectbox("Select Target Respected CPT Ambient:", ["16°C", "32°C", "43°C"], key="sim_c_amb")
-        
-    p_key = "32C" if "32" in sim_p_ambient else "43C"
-    c_key = "16C" if "16" in sim_c_ambient else ("32C" if "32" in sim_c_ambient else "43C")
-    
-    verify_db_structure(selected_volume, selected_arrangement, p_key, c_key)
-    vol_records = st.session_state.db[selected_volume][selected_arrangement][p_key][c_key]
-    
-    if not vol_records:
-        st.warning(f"⚠️ No matching profiles found under arrangement **{selected_arrangement}** for **Pulldown: {sim_p_ambient}** linked to **CPT: {sim_c_ambient}**.")
-    else:
-        st.markdown("#### Step 1: Input Current Pulldown Telemetry Vector")
-        sim_pulldown_file = st.file_uploader(
-            f"Auto-fill fields from local Pulldown Report ({sim_p_ambient})", 
-            type=["xlsx"], key=f"sim_file_upload_{p_key}_{c_key}"
-        )
-        
-        if 'active_pulldown_form' not in st.session_state:
-            st.session_state.active_pulldown_form = {feat: 0.0 for feat in tc_features}
-            st.session_state.last_uploaded_sim_file = None
-
-        if sim_pulldown_file and sim_pulldown_file != st.session_state.last_uploaded_sim_file:
-            try:
-                df_sim_p = pd.read_excel(sim_pulldown_file, sheet_name='Summary', header=1)
-                df_sim_p.columns = [str(c).strip() for c in df_sim_p.columns]
-                df_sim_p.iloc[:, 0] = df_sim_p.iloc[:, 0].astype(str).str.strip()
-                df_sim_p.set_index(df_sim_p.columns[0], inplace=True)
-                
-                mapping_keys = {
-                    'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
-                    'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'tvc':'tvc', 'S2':'S2'
-                }
-                for feat, xl_label in mapping_keys.items():
-                    if xl_label in df_sim_p.index:
-                        st.session_state.active_pulldown_form[feat] = float(df_sim_p.loc[xl_label, 'avg'])
-                st.session_state.last_uploaded_sim_file = sim_pulldown_file
-                st.toast("🟢 Parsed values pulled from sheet!", icon="📊")
-            except Exception as e:
-                st.error(f"Error parsing configuration: {str(e)}")
-
-        u_cols = st.columns(10)
-        new_pulldown_input = []
-        default_defaults = {'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 'tc-2': 1.6, 'tc-3': 0.5, 'tvc': 8.1, 'S2': 41.1}
-        
-        for i, feat in enumerate(tc_features):
-            curr_val = st.session_state.active_pulldown_form.get(feat, 0.0) or default_defaults.get(feat, 0.0)
-            val = u_cols[i].number_input(f"{feat}:", value=curr_val, key=f"sim_inp_{p_key}_{c_key}_{feat}")
-            new_pulldown_input.append(val)
-            
-        st.markdown("---")
-        st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
-        num_targets = st.number_input("Number of target sensor points (1 to 7):", min_value=1, max_value=7, value=3, step=1)
-        
-        target_sensors = []
-        s_cols = st.columns(int(num_targets))
-        for idx in range(int(num_targets)):
-            s_val = s_cols[idx].number_input(f"Sensor Query Point {idx+1} (°C):", value=-10.0 + (idx * 2.5), key=f"q_s_{p_key}_{c_key}_{idx}")
-            target_sensors.append(s_val)
-            
-        if st.button("🚀 Generate Predictive CPT Dataset Matrices", type="primary"):
-            with st.spinner("Interpolating variant mappings..."):
-                simulation_outputs = run_automated_simulation(vol_records, new_pulldown_input, target_sensors)
-                if not simulation_outputs:
-                    st.error("Simulation engine execution error.")
-                else:
-                    for key_title, df_res in simulation_outputs.items():
-                        st.markdown(f"### 📊 Predictions for {key_title}")
-                        st.dataframe(df_res, use_container_width=True, hide_index=True)
-
-# ================= INITIALIZE STATE ON STARTUP =================
-# Run this before your tab containers to ensure historical models pull cleanly
-if "db" not in st.session_state:
-    st.session_state.db = load_memory_from_disk()
-
-# =================================================================
-# 1. INITIALIZE KEY COUNTERS FOR THE FILE UPLOADERS (Put this near your startup state logic)
-# =================================================================
-if "p_file_key" not in st.session_state:
-    st.session_state.p_file_key = 0
-if "cpt_file_key" not in st.session_state:
-    st.session_state.cpt_file_key = 0
-
-# ================= TAB 2: DATA REPOSITORY ROOM =================
-# --- STRATEGY A (CORRECTED INDEXING FOR VISIBLE ROWS) ---
-try:
-    import openpyxl  
-    import pandas as pd
-
-    # Helper to handle cell parsing safely
-    def to_float(val):
-        try:
-            if pd.isna(val) or str(val).strip().lower() in ['nan', '']:
-                return 0.0
-            return float(str(val).strip())
-        except (ValueError, TypeError):
+def to_float(val):
+    """Safely converts Excel cell variants to python floats."""
+    try:
+        if pd.isna(val) or str(val).strip().lower() in ['nan', '']:
             return 0.0
+        return float(str(val).strip())
+    except (ValueError, TypeError):
+        return 0.0
 
-    # 1. Open the file natively using openpyxl to check row visibility states
-    wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+def interpolate_prediction(x_target, x1, x2, y1_dict, y2_dict):
+    """Applies a strict linear interpolation across dictionary structures."""
+    if abs(x1 - x2) < 1e-5:
+        return y1_dict
     
-    # Target the layout sheet safely
-    sheet_name = 'CPT CALCULATION REPORT' if 'CPT CALCULATION REPORT' in wb.sheetnames else wb.sheetnames[0]
-    ws = wb[sheet_name]
-    
-    # 2. Extract data into standard pandas format while filtering hidden rows
-    visible_rows = []
-    for r_idx, row in enumerate(ws.iter_rows(values_only=False), start=1):
-        if ws.row_dimensions[r_idx].hidden:
-            continue
-            
-        row_values = [cell.value for cell in row]
-        visible_rows.append(row_values)
-        
-    # 3. Convert only the visible rows into your processing DataFrame
-    df_cpt = pd.DataFrame(visible_rows)
-    
-    # After stripping hidden rows, rows 1-8 are skipped, meaning index 8 onwards contains the actual report
-    df_cpt = df_cpt.iloc[8:] 
-    df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
-    
-    current_flag = "Unknown"
-    for _, r in df_cpt.iterrows():
-        val_f1 = str(r.iloc[0]).strip() # Th Knob is in column A (0)
-        val_crit = str(r.iloc[1]).strip().lower() # Data Criteria is in column B (1)
-        
-        # Forward-fill the test flag context (e.g., level-5)
-        if val_f1 and val_f1 != 'nan' and val_f1 != current_flag:
-            current_flag = val_f1
-            
-        if current_flag not in cpt_structured:
-            cpt_structured[current_flag] = {}
-            
-        if val_crit in metric_types:
-            cpt_structured[current_flag][val_crit] = {
-                "tf-1": to_float(r.iloc[2]),   # Col C
-                "tf-2": to_float(r.iloc[3]),   # Col D
-                "tf-3": to_float(r.iloc[4]),   # Col E
-                "tf-4": to_float(r.iloc[5]),   # Col F
-                "tf-5": to_float(r.iloc[6]),   # Col G
-                "tc-1": to_float(r.iloc[12]),  # Col M
-                "tc-2": to_float(r.iloc[13]),  # Col N
-                "tc-3": to_float(r.iloc[14]),  # Col O
-                "tvc":  to_float(r.iloc[16]),  # Col Q (VC)
-                "S2":   to_float(r.iloc[19]),  # Col T (S2)
-                "Sensor": to_float(r.iloc[17]) # Col R (Sensor)
-            }
-            
-    if cpt_structured: 
-        parsed_successfully = True
+    factor = (x_target - x1) / (x2 - x1)
+    interpolated = {}
+    for flag_key, metrics in y1_dict.items():
+        interpolated[flag_key] = {}
+        for metric_name, channels in metrics.items():
+            interpolated[flag_key][metric_name] = {}
+            for channel_name, val1 in channels.items():
+                val2 = y2_dict.get(flag_key, {}).get(metric_name, {}).get(channel_name, val1)
+                interpolated[flag_key][metric_name][channel_name] = round(val1 + factor * (val2 - val1), 4)
+    return interpolated
 
-except Exception as e: 
-    st.write(f"Debug Info Strategy A Error: {str(e)}")
+# ==============================================================================
+# BLOCK 3: USER DASHBOARD - SIDEBAR COMPONENT INTERFACE
+# Function: Renders structural arrangement criteria controllers and volume contexts.
+# ==============================================================================
+with st.sidebar:
+    st.image("https://img.icons8.com/fluency/96/thermomenter.png", width=70)
+    st.title("OQC Simulator Hub")
+    st.write("Performance Test Judgment Engine")
+    st.write("---")
+    
+    selected_volume = st.selectbox("Target Appliance Volume Profile:", VOLUME_OPTIONS)
+    selected_arrangement = st.selectbox("Physical Hardware Arrangement Matrix:", ARRANGEMENT_OPTIONS)
+    
+    st.write("---")
+    st.caption("Designed for OQC Laboratory automation compliance standards. Supports multi-format telemetry logs.")
+
+# ==============================================================================
+# BLOCK 4: TAB 1 - AUTOMATED SIMULATOR ENGINE (PREDICTION & OVERRIDES)
+# Function: Computes predicted operational parameters from multi-dimensional tables.
+# ==============================================================================
+tab1, tab2, tab3 = st.tabs([
+    "📈 Auto-Interpolation Simulator Engine", 
+    "📥 Telemetry Lab Repository Room", 
+    "🛠️ Secure Reviewer Dashboard Space"
+])
+
+with tab1:
+    st.subheader(f"Predictive Matrix Output for [{selected_volume}]")
+    st.info(f"Current Target Configuration Layer: {selected_arrangement}")
+    
+    # User Input Parameters
+    sim_c1, sim_c2, sim_c3 = st.columns(3)
+    with sim_c1:
+        sim_p_ambient = st.selectbox("Target Pulldown Ambient:", ["32°C", "43°C"], key="sim_p_amb")
+    with sim_c2:
+        sim_c_ambient = st.selectbox("Target Connected CPT Ambient:", ["16°C", "32°C", "43°C"], key="sim_c_amb")
+    with sim_c3:
+        input_sensor_target = st.number_input("Desired Target Sensor Value (°C):", value=4.0, step=0.1)
+        
+    p_sim_key = "32C" if "32" in sim_p_ambient else "43C"
+    c_sim_key = "16C" if "16" in sim_c_ambient else ("32C" if "32" in sim_c_ambient else "43C")
+    
+    # Query database from cache layers
+    verify_db_structure(selected_volume, selected_arrangement, p_sim_key, c_sim_key)
+    available_records = st.session_state.db[selected_volume][selected_arrangement][p_sim_key][c_sim_key]
+    
+    if len(available_records) < 2:
+        st.warning("⚠️ Insufficient trained memory blocks inside the data repository. Please upload at least **2 companion reference files** in Tab 2 to calibrate the linear interpolation matrices.")
+    else:
+        # Sort history records based on their recorded baseline hardware sensors
+        sorted_records = sorted(available_records, key=lambda k: k.get("pulldown_baseline_sensor", 0.0))
+        sensor_baselines = [r.get("pulldown_baseline_sensor", 0.0) for r in sorted_records]
+        
+        # Locate bracket anchors
+        idx1, idx2 = None, None
+        if input_sensor_target <= sensor_baselines[0]:
+            idx1, idx2 = 0, 1
+        elif input_sensor_target >= sensor_baselines[-1]:
+            idx1, idx2 = len(sorted_records) - 2, len(sorted_records) - 1
+        else:
+            for i in range(len(sensor_baselines) - 1):
+                if sensor_baselines[i] <= input_sensor_target <= sensor_baselines[i+1]:
+                    idx1, idx2 = i, i+1
+                    break
+        
+        r1, r2 = sorted_records[idx1], sorted_records[idx2]
+        x1, x2 = r1["pulldown_baseline_sensor"], r2["pulldown_baseline_sensor"]
+        
+        # Run matrix loop calculation
+        simulated_cpt = interpolate_prediction(input_sensor_target, x1, x2, r1["cpt_data"], r2["cpt_data"])
+        
+        st.write("### 🚀 Generated Simulation Matrix Output")
+        st.success(f"Mathematical Interpolation verified successfully bounded between reference points {x1}°C and {x2}°C.")
+        
+        # Construct displayable structures
+        output_rows = []
+        for flg, metrics in simulated_cpt.items():
+            for crit, channels in metrics.items():
+                row_item = {"Test Knob Flag": flg, "Data Criteria": crit}
+                row_item.update(channels)
+                output_rows.append(row_item)
+                
+        if output_rows:
+            st.dataframe(pd.DataFrame(output_rows), use_container_width=True, hide_index=True)
+
+# ==============================================================================
+# BLOCK 5: TAB 2 - DATA REPOSITORY ROOM & 5-WAY MULTI-FORMAT FAILSAFE
+# Function: Handles openpyxl visibility checking and parsing strategies A, B, C, D, E.
+# ==============================================================================
 with tab2:
     st.subheader(f"Onboard Lab Reports for [{selected_volume}] ({selected_arrangement})")
     
@@ -507,14 +210,12 @@ with tab2:
     
     col_f1, col_f2 = st.columns(2)
     with col_f1:
-        # Dynamically controlled key using a counter inside session state
         repo_pulldown_file = st.file_uploader(
             f"Upload Pulldown Excel ({repo_p_ambient})", 
             type=["xlsx", "xls"], 
             key=f"r_p_file_{p_repo_key}_{c_repo_key}_v_{st.session_state.p_file_key}"
         )
     with col_f2:
-        # Dynamically controlled key using a counter inside session state
         repo_cpt_file = st.file_uploader(
             f"Upload Respected CPT Excel ({repo_c_ambient})", 
             type=["xlsx", "xls"], 
@@ -547,11 +248,7 @@ with tab2:
                     p_extracted[target_key] = sheet_data.get(normalized_label, 0.0)
                         
                 tvc_values = [sheet_data[lbl] for lbl in ['tvc1', 'tvc2', 'tvc3'] if lbl in sheet_data]
-                if tvc_values:
-                    p_extracted['tvc'] = round(sum(tvc_values) / len(tvc_values), 4)
-                else:
-                    p_extracted['tvc'] = 0.0
-                    
+                p_extracted['tvc'] = round(sum(tvc_values) / len(tvc_values), 4) if tvc_values else 0.0
                 resolved_sensor = sheet_data.get('sensor', 0.0)
                 
                 # -------------------------------------------------------------
@@ -560,26 +257,39 @@ with tab2:
                 cpt_structured = {}
                 parsed_successfully = False
                 
-                # --- STRATEGY A: Original Standard Layout Sheet ---
+                # --- STRATEGY A: Original Standard Layout Sheet with Native openpyxl Hidden Row Logic ---
                 try:
-                    df_cpt = pd.read_excel(repo_cpt_file, sheet_name='Report', skiprows=8)
+                    import openpyxl  
+                    wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+                    sheet_name = 'CPT CALCULATION REPORT' if 'CPT CALCULATION REPORT' in wb.sheetnames else wb.sheetnames[0]
+                    ws = wb[sheet_name]
+                    
+                    visible_rows = []
+                    for r_idx, row in enumerate(ws.iter_rows(values_only=False), start=1):
+                        if ws.row_dimensions[r_idx].hidden:
+                            continue
+                        visible_rows.append([cell.value for cell in row])
+                        
+                    df_cpt = pd.DataFrame(visible_rows)
+                    df_cpt = df_cpt.iloc[8:] 
                     df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
                     
                     current_flag = "Unknown"
                     for _, r in df_cpt.iterrows():
-                        val_f1 = str(r.iloc[1]).strip()
-                        val_crit = str(r.iloc[2]).strip().lower()
+                        val_f1 = str(r.iloc[0]).strip() 
+                        val_crit = str(r.iloc[1]).strip().lower() 
+                        
                         if val_f1 and val_f1 != 'nan' and val_f1 != current_flag:
                             current_flag = val_f1
                         if current_flag not in cpt_structured:
                             cpt_structured[current_flag] = {}
+                            
                         if val_crit in metric_types:
                             cpt_structured[current_flag][val_crit] = {
-                                "tf-1": float(r.iloc[3]), "tf-2": float(r.iloc[4]), "tf-3": float(r.iloc[5]),
-                                "tf-4": float(r.iloc[6]), "tf-5": float(r.iloc[7]), "tc-1": float(r.iloc[9]),
-                                "tc-2": float(r.iloc[10]), "tc-3": float(r.iloc[11]), "tvc": float(r.iloc[13]),
-                                "S2": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0,
-                                "Sensor": float(r.iloc[17]) if len(r) > 17 and pd.notna(r.iloc[17]) else 0.0
+                                "tf-1": to_float(r.iloc[2]),   "tf-2": to_float(r.iloc[3]),   "tf-3": to_float(r.iloc[4]),   
+                                "tf-4": to_float(r.iloc[5]),   "tf-5": to_float(r.iloc[6]),   "tc-1": to_float(r.iloc[12]),  
+                                "tc-2": to_float(r.iloc[13]),  "tc-3": to_float(r.iloc[14]),  "tvc":  to_float(r.iloc[16]),  
+                                "S2":   to_float(r.iloc[19]),  "Sensor": to_float(r.iloc[17]) 
                             }
                     if cpt_structured: parsed_successfully = True
                 except Exception: pass
@@ -742,45 +452,42 @@ with tab2:
                                             elif tag == "sensor":
                                                 try: flag_extracted["Sensor"] = float(sub_row.iloc[c_idx + 2])
                                                 except (ValueError, TypeError): pass
-                                
+                                                
                                 if tvc_accumulator:
                                     flag_extracted["tvc"] = round(sum(tvc_accumulator) / len(tvc_accumulator), 4)
                                     
                                 if current_flag not in cpt_structured:
                                     cpt_structured[current_flag] = {}
                                 cpt_structured[current_flag]["mean"] = flag_extracted
-                        
+                                
                         if cpt_structured: parsed_successfully = True
                     except Exception: pass
 
                 # -------------------------------------------------------------
-                # 3. SAVE DATA MATRIX AND FORCE RETENTION TO HARD DISK
+                # DB STORAGE REFRESH & STATE RERUN
                 # -------------------------------------------------------------
                 if not parsed_successfully or not cpt_structured:
                     raise ValueError("CPT processing pipeline failed. Spreadsheet structural pattern unknown.")
 
                 new_block = {"pulldown_data": p_extracted, "pulldown_baseline_sensor": resolved_sensor, "cpt_data": cpt_structured}
-                
                 verify_db_structure(selected_volume, selected_arrangement, p_repo_key, c_repo_key)
                 st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key].append(new_block)
                 st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key] = st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key][-10:]
                 
                 save_memory_to_disk(st.session_state.db)
                 
-                # -------------------------------------------------------------
-                # 4. RESET FILE UPLOADERS BY INCREMENTING WIDGET KEYS
-                # -------------------------------------------------------------
                 st.session_state.p_file_key += 1
                 st.session_state.cpt_file_key += 1
-                
                 st.success(f"🚀 Model Simulator Trained successfully! Hard-Backup saved to storage file context.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Compilation error parsing dataset rows: {str(e)}")
 
-# ================= TAB 3: REVIEWER DASHBOARD =================
+# ==============================================================================
+# BLOCK 6: TAB 3 - SECURE ADMINISTRATIVE REVIEWER DASHBOARD
+# Function: Secure password gate, data record inspections, and memory purging.
+# ==============================================================================
 with tab3:
-    # 1. Secure Authentication Shield Check
     if not st.session_state.reviewer_logged_in:
         st.subheader("🔒 Secure Reviewer Administration Access")
         pass_input = st.text_input("Enter Laboratory Administrative Password:", type="password")
@@ -792,7 +499,6 @@ with tab3:
             else:
                 st.error("Invalid Administrative Credentials. Access Denied.")
     else:
-        # 2. Main Dashboard Layout Once Unlocked
         st.write("### 🔓 Repository Memory Inspection & Manipulation")
         
         c_header1, c_header2 = st.columns([4, 1])
@@ -805,45 +511,27 @@ with tab3:
                 
         st.write("---")
         
-        # 3. Setup Layout Columns for Inspection Selection
         insp_c1, insp_c2 = st.columns(2)
-        
         with insp_c1:
-            inspect_p_amb = st.selectbox(
-                "Inspect Pulldown Ambient Space:", 
-                ["32°C", "43°C"], 
-                key="rev_inspect_p_amb"
-            )
+            inspect_p_amb = st.selectbox("Inspect Pulldown Ambient Space:", ["32°C", "43°C"], key="rev_inspect_p_amb")
         with insp_c2:
-            inspect_c_amb = st.selectbox(
-                "Inspect CPT Ambient Space:", 
-                ["16°C", "32°C", "43°C"], 
-                index=1,  # Sets default to 32°C so both dropdowns align on load!
-                key="rev_inspect_c_amb"
-            )
+            inspect_c_amb = st.selectbox("Inspect CPT Ambient Space:", ["16°C", "32°C", "43°C"], index=1, key="rev_inspect_c_amb")
             
-        # 4. Dynamic Live Filtering Subtext Status (Fixes your string tracking mismatch error)
         st.caption(f"Currently filtering Pulldown: {inspect_p_amb} / CPT: {inspect_c_amb}")
         
-        # 5. Extract Correct Normalized Mapping Dictionary Keys
         p_inspect_key = "32C" if "32" in inspect_p_amb else "43C"
         c_inspect_key = "16C" if "16" in inspect_c_amb else ("32C" if "32" in inspect_c_amb else "43C")
         
-        # 6. Safety Verify DB Matrix Sub-Structure Exists
         verify_db_structure(selected_volume, selected_arrangement, p_inspect_key, c_inspect_key)
         records = st.session_state.db[selected_volume][selected_arrangement][p_inspect_key][c_inspect_key]
         
-       # 7. Render Active Memory Pool Records Table
         if not records:
             st.info("No paired records matched for this specific arrangement selection.")
         else:
             st.success(f"Found {len(records)} trained datasets stored in hard backup matrix memory loop.")
             
-            # --- LOOP THROUGH AND RENDER EACH TRAINED DATASET ---
             for run_idx, record in enumerate(records):
                 with st.expander(f"📦 Trained Dataset Record #{run_idx + 1}", expanded=(run_idx == 0)):
-                    
-                    # Row management buttons (Optional deletion system placeholder)
                     c_btn1, c_btn2 = st.columns([4, 1])
                     with c_btn1:
                         st.markdown(f"**Baseline Sensor Target Setting:** `{record.get('pulldown_baseline_sensor', 0.0)}°C`")
@@ -854,26 +542,19 @@ with tab3:
                             st.success("Dataset purged successfully!")
                             st.rerun()
 
-                    # Section A: Display Pulldown Data Summary Table
                     st.markdown("#### 🔹 Pulldown Baseline Layer Matrix")
                     p_df = pd.DataFrame([record['pulldown_data']])
                     st.dataframe(p_df, use_container_width=True, hide_index=True)
                     
-                    # Section B: Display CPT Multivariable Flags Data Matrix
                     st.markdown("#### 🔹 Connected CPT Multi-Format Condition Flags")
-                    
                     cpt_rows = []
                     for flag_name, flag_metrics in record['cpt_data'].items():
                         for metric_name, sensor_values in flag_metrics.items():
-                            row_entry = {
-                                "Test Flag": flag_name,
-                                "Data Criteria": metric_name,
-                            }
+                            row_entry = {"Test Flag": flag_name, "Data Criteria": metric_name}
                             row_entry.update(sensor_values)
                             cpt_rows.append(row_entry)
                     
                     if cpt_rows:
-                        cpt_df = pd.DataFrame(cpt_rows)
-                        st.dataframe(cpt_df, use_container_width=True, hide_index=True)
+                        st.dataframe(pd.DataFrame(cpt_rows), use_container_width=True, hide_index=True)
                     else:
                         st.warning("No metric matrix entries found inside this specific record block.")

@@ -257,42 +257,206 @@ with tab2:
                 cpt_structured = {}
                 parsed_successfully = False
                 
-                # --- STRATEGY A: Original Standard Layout Sheet with Native openpyxl Hidden Row Logic ---
-                try:
-                    import openpyxl  
-                    wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
-                    sheet_name = 'CPT CALCULATION REPORT' if 'CPT CALCULATION REPORT' in wb.sheetnames else wb.sheetnames[0]
-                    ws = wb[sheet_name]
-                    
-                    visible_rows = []
-                    for r_idx, row in enumerate(ws.iter_rows(values_only=False), start=1):
-                        if ws.row_dimensions[r_idx].hidden:
-                            continue
-                        visible_rows.append([cell.value for cell in row])
-                        
-                    df_cpt = pd.DataFrame(visible_rows)
-                    df_cpt = df_cpt.iloc[8:] 
-                    df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
-                    
-                    current_flag = "Unknown"
-                    for _, r in df_cpt.iterrows():
-                        val_f1 = str(r.iloc[0]).strip() 
-                        val_crit = str(r.iloc[1]).strip().lower() 
-                        
-                        if val_f1 and val_f1 != 'nan' and val_f1 != current_flag:
-                            current_flag = val_f1
-                        if current_flag not in cpt_structured:
-                            cpt_structured[current_flag] = {}
-                            
-                        if val_crit in metric_types:
-                            cpt_structured[current_flag][val_crit] = {
-                                "tf-1": to_float(r.iloc[2]),   "tf-2": to_float(r.iloc[3]),   "tf-3": to_float(r.iloc[4]),   
-                                "tf-4": to_float(r.iloc[5]),   "tf-5": to_float(r.iloc[6]),   "tc-1": to_float(r.iloc[12]),  
-                                "tc-2": to_float(r.iloc[13]),  "tc-3": to_float(r.iloc[14]),  "tvc":  to_float(r.iloc[16]),  
-                                "S2":   to_float(r.iloc[19]),  "Sensor": to_float(r.iloc[17]) 
-                            }
-                    if cpt_structured: parsed_successfully = True
-                except Exception: pass
+                import openpyxl
+import pandas as pd
+
+# ---------------------------------------------------------
+# Strategy A : Visible Ambient Parser
+# ---------------------------------------------------------
+
+def to_float(v):
+    try:
+        if pd.isna(v):
+            return 0.0
+        return float(v)
+    except:
+        return 0.0
+
+
+def parse_visible_cpt(file):
+
+    wb = openpyxl.load_workbook(file, data_only=True)
+
+    sheet_name = (
+        "ANALYSIS REPORT"
+        if "ANALYSIS REPORT" in wb.sheetnames
+        else wb.sheetnames[0]
+    )
+
+    ws = wb[sheet_name]
+
+    # --------------------------------------------
+    # Read ONLY visible rows
+    # --------------------------------------------
+    visible_rows = []
+
+    for r in range(1, ws.max_row + 1):
+
+        if ws.row_dimensions[r].hidden:
+            continue
+
+        visible_rows.append(
+            [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
+        )
+
+    df = pd.DataFrame(visible_rows)
+
+    # --------------------------------------------
+    # Locate the table header automatically
+    # --------------------------------------------
+    header_row = None
+
+    for i in range(len(df)):
+
+        row = (
+            df.iloc[i]
+            .astype(str)
+            .str.lower()
+            .str.replace(" ", "")
+        )
+
+        if (
+            row.str.contains("tf1").any()
+            and row.str.contains("tc1").any()
+        ):
+            header_row = i
+            break
+
+    if header_row is None:
+        raise Exception("Unable to locate CPT table.")
+
+    headers = (
+        df.iloc[header_row]
+        .astype(str)
+        .str.strip()
+        .tolist()
+    )
+
+    df = df.iloc[header_row + 1:].reset_index(drop=True)
+    df.columns = headers
+
+    # --------------------------------------------
+    # Normalize column names
+    # --------------------------------------------
+
+    rename = {}
+
+    for c in df.columns:
+
+        x = str(c).lower()
+
+        x = (
+            x.replace("-", "")
+             .replace(" ", "")
+             .replace("_", "")
+        )
+
+        if x == "tf1":
+            rename[c] = "tf1"
+
+        elif x == "tf2":
+            rename[c] = "tf2"
+
+        elif x == "tf3":
+            rename[c] = "tf3"
+
+        elif x == "tf4":
+            rename[c] = "tf4"
+
+        elif x == "tf5":
+            rename[c] = "tf5"
+
+        elif x == "tc1":
+            rename[c] = "tc1"
+
+        elif x == "tc2":
+            rename[c] = "tc2"
+
+        elif x == "tc3":
+            rename[c] = "tc3"
+
+        elif "vc" in x:
+            rename[c] = "tvc"
+
+        elif "chilleravg" in x or x == "s2":
+            rename[c] = "S2"
+
+        elif "sensor" in x:
+            rename[c] = "Sensor"
+
+        elif "criteria" in x:
+            rename[c] = "Criteria"
+
+        elif "flag" in x or "knob" in x:
+            rename[c] = "Flag"
+
+    df.rename(columns=rename, inplace=True)
+
+    # --------------------------------------------
+    # Forward fill Test Flag
+    # --------------------------------------------
+
+    df["Flag"] = df["Flag"].ffill()
+
+    # --------------------------------------------
+    # Extract required values
+    # --------------------------------------------
+
+    cpt_structured = {}
+
+    for flag in df["Flag"].dropna().unique():
+
+        block = df[df["Flag"] == flag]
+
+        mean_row = block[
+            block["Criteria"]
+            .astype(str)
+            .str.lower()
+            .eq("mean")
+        ]
+
+        min_row = block[
+            block["Criteria"]
+            .astype(str)
+            .str.lower()
+            .eq("min")
+        ]
+
+        if mean_row.empty:
+            continue
+
+        mean_row = mean_row.iloc[0]
+
+        sensor_value = (
+            to_float(min_row.iloc[0]["Sensor"])
+            if not min_row.empty
+            else 0.0
+        )
+
+        cpt_structured[flag] = {
+
+            "mean": {
+
+                "tf-1": to_float(mean_row["tf1"]),
+                "tf-2": to_float(mean_row["tf2"]),
+                "tf-3": to_float(mean_row["tf3"]),
+                "tf-4": to_float(mean_row["tf4"]),
+                "tf-5": to_float(mean_row["tf5"]),
+
+                "tc-1": to_float(mean_row["tc1"]),
+                "tc-2": to_float(mean_row["tc2"]),
+                "tc-3": to_float(mean_row["tc3"]),
+
+                "tvc": to_float(mean_row["tvc"]),
+
+                "S2": to_float(mean_row["S2"]),
+
+                "Sensor": sensor_value,
+            }
+
+        }
+
+    return cpt_structured
 
                 # --- STRATEGY B: 2nd Sheet Multi-Row Header Format ---
                 if not parsed_successfully:

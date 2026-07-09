@@ -50,13 +50,18 @@ tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', '
 metric_types = ['mean', 'min', 'max', '(max+min)/2']
 
 # =================================================================
-# 3. UTILITY HELPER FUNCTIONS
+# 3. UTILITY HELPER FUNCTIONS`
 # =================================================================
 def normalize_sensor_name(name):
     if not isinstance(name, str):
         return ""
     # Lowercase, remove hyphens, spaces, and underscores (e.g., "tf-1" -> "tf1")
     return name.lower().replace(" ", "").replace("-", "").replace("_", "").strip()
+def to_float(...):
+    ...
+
+def parse_visible_cpt(...):
+    ...
 
 # Helper initialization to safeguard nested multi-arrangement structure
 def verify_db_structure(vol, arr_name, p_amb, c_amb):
@@ -560,206 +565,20 @@ with tab2:
                 cpt_structured = {}
                 parsed_successfully = False
                 
-                import openpyxl
-import pandas as pd
+# -------------------------------------------------------------
+# STRATEGY A : Visible Ambient Parser
+# -------------------------------------------------------------
+try:
 
-# ---------------------------------------------------------
-# Strategy A : Visible Ambient Parser
-# ---------------------------------------------------------
+    cpt_structured = parse_visible_cpt(repo_cpt_file)
 
-def to_float(v):
-    try:
-        if pd.isna(v):
-            return 0.0
-        return float(v)
-    except:
-        return 0.0
+    if cpt_structured:
+        parsed_successfully = True
+        st.success("✅ Strategy A successful.")
 
+except Exception as e:
 
-def parse_visible_cpt(file):
-
-    wb = openpyxl.load_workbook(file, data_only=True)
-
-    sheet_name = (
-        "ANALYSIS REPORT"
-        if "ANALYSIS REPORT" in wb.sheetnames
-        else wb.sheetnames[0]
-    )
-
-    ws = wb[sheet_name]
-
-    # --------------------------------------------
-    # Read ONLY visible rows
-    # --------------------------------------------
-    visible_rows = []
-
-    for r in range(1, ws.max_row + 1):
-
-        if ws.row_dimensions[r].hidden:
-            continue
-
-        visible_rows.append(
-            [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
-        )
-
-    df = pd.DataFrame(visible_rows)
-
-    # --------------------------------------------
-    # Locate the table header automatically
-    # --------------------------------------------
-    header_row = None
-
-    for i in range(len(df)):
-
-        row = (
-            df.iloc[i]
-            .astype(str)
-            .str.lower()
-            .str.replace(" ", "")
-        )
-
-        if (
-            row.str.contains("tf1").any()
-            and row.str.contains("tc1").any()
-        ):
-            header_row = i
-            break
-
-    if header_row is None:
-        raise Exception("Unable to locate CPT table.")
-
-    headers = (
-        df.iloc[header_row]
-        .astype(str)
-        .str.strip()
-        .tolist()
-    )
-
-    df = df.iloc[header_row + 1:].reset_index(drop=True)
-    df.columns = headers
-
-    # --------------------------------------------
-    # Normalize column names
-    # --------------------------------------------
-
-    rename = {}
-
-    for c in df.columns:
-
-        x = str(c).lower()
-
-        x = (
-            x.replace("-", "")
-             .replace(" ", "")
-             .replace("_", "")
-        )
-
-        if x == "tf1":
-            rename[c] = "tf1"
-
-        elif x == "tf2":
-            rename[c] = "tf2"
-
-        elif x == "tf3":
-            rename[c] = "tf3"
-
-        elif x == "tf4":
-            rename[c] = "tf4"
-
-        elif x == "tf5":
-            rename[c] = "tf5"
-
-        elif x == "tc1":
-            rename[c] = "tc1"
-
-        elif x == "tc2":
-            rename[c] = "tc2"
-
-        elif x == "tc3":
-            rename[c] = "tc3"
-
-        elif "vc" in x:
-            rename[c] = "tvc"
-
-        elif "chilleravg" in x or x == "s2":
-            rename[c] = "S2"
-
-        elif "sensor" in x:
-            rename[c] = "Sensor"
-
-        elif "criteria" in x:
-            rename[c] = "Criteria"
-
-        elif "flag" in x or "knob" in x:
-            rename[c] = "Flag"
-
-    df.rename(columns=rename, inplace=True)
-
-    # --------------------------------------------
-    # Forward fill Test Flag
-    # --------------------------------------------
-
-    df["Flag"] = df["Flag"].ffill()
-
-    # --------------------------------------------
-    # Extract required values
-    # --------------------------------------------
-
-    cpt_structured = {}
-
-    for flag in df["Flag"].dropna().unique():
-
-        block = df[df["Flag"] == flag]
-
-        mean_row = block[
-            block["Criteria"]
-            .astype(str)
-            .str.lower()
-            .eq("mean")
-        ]
-
-        min_row = block[
-            block["Criteria"]
-            .astype(str)
-            .str.lower()
-            .eq("min")
-        ]
-
-        if mean_row.empty:
-            continue
-
-        mean_row = mean_row.iloc[0]
-
-        sensor_value = (
-            to_float(min_row.iloc[0]["Sensor"])
-            if not min_row.empty
-            else 0.0
-        )
-
-        cpt_structured[flag] = {
-
-            "mean": {
-
-                "tf-1": to_float(mean_row["tf1"]),
-                "tf-2": to_float(mean_row["tf2"]),
-                "tf-3": to_float(mean_row["tf3"]),
-                "tf-4": to_float(mean_row["tf4"]),
-                "tf-5": to_float(mean_row["tf5"]),
-
-                "tc-1": to_float(mean_row["tc1"]),
-                "tc-2": to_float(mean_row["tc2"]),
-                "tc-3": to_float(mean_row["tc3"]),
-
-                "tvc": to_float(mean_row["tvc"]),
-
-                "S2": to_float(mean_row["S2"]),
-
-                "Sensor": sensor_value,
-            }
-
-        }
-
-    return cpt_structured
+    st.write(f"Strategy A failed: {e}")
 
                 # --- STRATEGY B: 2nd Sheet Multi-Row Header Format ---
                 if not parsed_successfully:

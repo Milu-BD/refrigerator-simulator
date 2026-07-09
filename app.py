@@ -138,6 +138,10 @@ tab1, tab2, tab3 = st.tabs(["Simulation Hub", "Data Repository Room", "Analytics
 with tab2:
     st.header("Data Repository Room")
     
+    # Initialize target structure dictionary and tracking status cleanly first
+    cpt_structured = {}
+    parsed_successfully = False
+    
     # --- STEP 1: RENDER THE FILE UPLOADER FIRST ---
     repo_cpt_file = st.file_uploader(
         "Upload CPT Calculation Report (Excel)", 
@@ -145,13 +149,8 @@ with tab2:
         key=st.session_state.cpt_file_key
     )
     
-    # --- STEP 2: RUN STRATEGY A ONLY IF A FILE IS PRESENT ---
+    # --- STEP 2: RUN STRATEGY A *ONLY* IF A FILE IS PRESENT ---
     if repo_cpt_file is not None:
-        
-        # Initialize processing variables safely to prevent NameErrors later
-        cpt_structured = {}
-        parsed_successfully = False
-        
         try:
             import openpyxl  
             import pandas as pd
@@ -223,6 +222,7 @@ with tab2:
             st.error(f"Debug Info Strategy A Error: {str(e)}")
             
     else:
+        # If no file is loaded, show info and block processing downward execution errors
         st.info("💡 Please upload an Excel sheet to parse data coordinates.")
 
 

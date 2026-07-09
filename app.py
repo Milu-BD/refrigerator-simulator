@@ -57,10 +57,16 @@ def normalize_sensor_name(name):
         return ""
     # Lowercase, remove hyphens, spaces, and underscores (e.g., "tf-1" -> "tf1")
     return name.lower().replace(" ", "").replace("-", "").replace("_", "").strip()
-def to_float(...):
+def to_float(v):
+    try:
+        if pd.isna(v) or str(v).strip() == "":
+            return 0.0
+        return float(v)
+    except:
+        return 0.0
     ...
 
-def parse_visible_cpt(...):
+def parse_visible_cpt(repo_cpt_file):
     ...
 
 # Helper initialization to safeguard nested multi-arrangement structure

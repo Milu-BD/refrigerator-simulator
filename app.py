@@ -322,6 +322,58 @@ if "cpt_file_key" not in st.session_state:
     st.session_state.cpt_file_key = 0
 
 # ================= TAB 2: DATA REPOSITORY ROOM =================
+import openpyxl
+
+# ... inside your Tab 2 file processing block ...
+
+# --- STRATEGY A (UPDATED FOR VISIBILITY/HIDDEN DETECTION) ---
+try:
+    # 1. Open the file natively using openpyxl to check row visibility states
+    wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+    
+    # Target the layout sheet (handle standard sheet matching safely)
+    sheet_name = 'CPT CALCULATION REPORT' if 'CPT CALCULATION REPORT' in wb.sheetnames else wb.sheetnames[0]
+    ws = wb[sheet_name]
+    
+    # 2. Extract data into standard pandas format while filtering hidden rows
+    visible_rows = []
+    for r_idx, row in enumerate(ws.iter_rows(values_only=False), start=1):
+        # SKIP if the row is hidden in Excel!
+        if ws.row_dimensions[r_idx].hidden:
+            continue
+            
+        # Keep row values if the row is visible
+        row_values = [cell.value for cell in row]
+        visible_rows.append(row_values)
+        
+    # 3. Convert only the visible rows into your processing DataFrame
+    df_cpt = pd.DataFrame(visible_rows)
+    
+    # (From here, execute your regular parsing logic on the clean df_cpt)
+    # Adjust skiprows accordingly since hidden rows are already stripped out
+    df_cpt = df_cpt.iloc[8:] # Replaces your old skiprows=8
+    df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
+    
+    current_flag = "Unknown"
+    for _, r in df_cpt.iterrows():
+        val_f1 = str(r.iloc[1]).strip()
+        val_crit = str(r.iloc[2]).strip().lower()
+        if val_f1 and val_f1 != 'nan' and val_f1 != current_flag:
+            current_flag = val_f1
+        if current_flag not in cpt_structured:
+            cpt_structured[current_flag] = {}
+        if val_crit in metric_types:
+            cpt_structured[current_flag][val_crit] = {
+                "tf-1": float(r.iloc[3]), "tf-2": float(r.iloc[4]), "tf-3": float(r.iloc[5]),
+                "tf-4": float(r.iloc[6]), "tf-5": float(r.iloc[7]), "tc-1": float(r.iloc[13]), # adjust column index mapping if shifted
+                "tc-2": float(r.iloc[14]), "tc-3": float(r.iloc[15]), "tvc": float(r.iloc[20]),
+                "S2": float(r.iloc[24]) if len(r) > 24 and pd.notna(r.iloc[24]) else 0.0,
+                "Sensor": float(r.iloc[24]) if len(r) > 24 and pd.notna(r.iloc[24]) else 0.0
+            }
+    if cpt_structured: 
+        parsed_successfully = True
+except Exception as e: 
+    st.write(f"Debug Info Strategy A: {str(e)}")
 with tab2:
     st.subheader(f"Onboard Lab Reports for [{selected_volume}] ({selected_arrangement})")
     

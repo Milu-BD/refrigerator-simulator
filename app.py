@@ -323,6 +323,23 @@ if "cpt_file_key" not in st.session_state:
 
 # ================= TAB 2: DATA REPOSITORY ROOM =================
 # --- STRATEGY A (CORRECTED INDEXING FOR VISIBLE ROWS) ---
+# --- STRATEGY A (CORRECTED INDEXING FOR VISIBLE ROWS) ---
+try:
+    import openpyxl  # <-- ADD THIS LINE HERE
+    import pandas as pd
+
+    # Helper to handle cell parsing safely
+    def to_float(val):
+        try:
+            if pd.isna(val) or str(val).strip().lower() in ['nan', '']:
+                return 0.0
+            return float(str(val).strip())
+        except (ValueError, TypeError):
+            return 0.0
+
+    # 1. Open the file natively using openpyxl to check row visibility states
+    wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+# ... remainder of your code follows
 try:
     # Helper to handle cell parsing safely
     def to_float(val):

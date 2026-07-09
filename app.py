@@ -662,10 +662,47 @@ with tab3:
         verify_db_structure(selected_volume, selected_arrangement, p_inspect_key, c_inspect_key)
         records = st.session_state.db[selected_volume][selected_arrangement][p_inspect_key][c_inspect_key]
         
-        # 7. Render Active Memory Pool Records Table
+       # 7. Render Active Memory Pool Records Table
         if not records:
             st.info("No paired records matched for this specific arrangement selection.")
         else:
             st.success(f"Found {len(records)} trained datasets stored in hard backup matrix memory loop.")
             
-            # (Your existing table plotting loops, data deletion widgets, or row-pop blocks can safely execute here using the synchronized 'records' variable)
+            # --- LOOP THROUGH AND RENDER EACH TRAINED DATASET ---
+            for run_idx, record in enumerate(records):
+                with st.expander(f"📦 Trained Dataset Record #{run_idx + 1}", expanded=(run_idx == 0)):
+                    
+                    # Row management buttons (Optional deletion system placeholder)
+                    c_btn1, c_btn2 = st.columns([4, 1])
+                    with c_btn1:
+                        st.markdown(f"**Baseline Sensor Target Setting:** `{record.get('pulldown_baseline_sensor', 0.0)}°C`")
+                    with c_btn2:
+                        if st.button("🗑️ Delete Dataset", key=f"del_ds_{p_inspect_key}_{c_inspect_key}_{run_idx}"):
+                            records.pop(run_idx)
+                            save_memory_to_disk(st.session_state.db)
+                            st.success("Dataset purged successfully!")
+                            st.rerun()
+
+                    # Section A: Display Pulldown Data Summary Table
+                    st.markdown("#### 🔹 Pulldown Baseline Layer Matrix")
+                    p_df = pd.DataFrame([record['pulldown_data']])
+                    st.dataframe(p_df, use_container_width=True, hide_index=True)
+                    
+                    # Section B: Display CPT Multivariable Flags Data Matrix
+                    st.markdown("#### 🔹 Connected CPT Multi-Format Condition Flags")
+                    
+                    cpt_rows = []
+                    for flag_name, flag_metrics in record['cpt_data'].items():
+                        for metric_name, sensor_values in flag_metrics.items():
+                            row_entry = {
+                                "Test Flag": flag_name,
+                                "Data Criteria": metric_name,
+                            }
+                            row_entry.update(sensor_values)
+                            cpt_rows.append(row_entry)
+                    
+                    if cpt_rows:
+                        cpt_df = pd.DataFrame(cpt_rows)
+                        st.dataframe(cpt_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.warning("No metric matrix entries found inside this specific record block.")

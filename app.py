@@ -1,44 +1,81 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-from sklearn.neighbors import KNeighborsRegressor
 import json
 import os
+import numpy as np
+import pandas as pd
+from sklearn.neighbors import KNeighborsRegressor
+import streamlit as st
 
+# Must be the absolute first Streamlit command in the script
 st.set_page_config(page_title="Refrigerator Simulator Hub", layout="wide")
 
-MEMORY_FILE = "simulator_memory.json"
+# =================================================================
+# 1. HARD DISK PERSISTENCE LAYER
+# =================================================================
+STORAGE_FILE = "simulator_storage.json"
 REVIEWER_PASSWORD = "Admin@Cooling2026"
 
-def load_memory():
-    if os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE, "r") as f:
-            try:
+def load_memory_from_disk():
+    """Reads saved database matrix from local disk storage on startup."""
+    if os.path.exists(STORAGE_FILE):
+        try:
+            with open(STORAGE_FILE, "r") as f:
                 return json.load(f)
-            except:
-                return {}
+        except Exception as e:
+            st.error(f"⚠️ Error loading backup database file: {str(e)}")
     return {}
 
-def save_memory(data):
-    with open(MEMORY_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+def save_memory_to_disk(db_matrix):
+    """Writes the current database matrix to local disk storage instantly."""
+    try:
+        with open(STORAGE_FILE, "w") as f:
+            json.dump(db_matrix, f, indent=4)
+    except Exception as e:
+        st.error(f"⚠️ Failed to write backup data to disk: {str(e)}")
 
-if 'db' not in st.session_state:
-    st.session_state.db = load_memory()
+# Legacy compatibility wrapper in case it's explicitly called later in your file
+def save_memory(data):
+    save_memory_to_disk(data)
+
+# =================================================================
+# 2. STATE INITIALIZATION ON STARTUP
+# =================================================================
+if "db" not in st.session_state:
+    st.session_state.db = load_memory_from_disk()
 
 if 'reviewer_logged_in' not in st.session_state:
     st.session_state.reviewer_logged_in = False
 
+# Global configuration constants
 tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', 'tvc', 'S2']
 metric_types = ['mean', 'min', 'max', '(max+min)/2']
 
-# Place this near the top of app.py with your other helper functions
+# =================================================================
+# 3. UTILITY HELPER FUNCTIONS
+# =================================================================
 def normalize_sensor_name(name):
     if not isinstance(name, str):
         return ""
     # Lowercase, remove hyphens, spaces, and underscores (e.g., "tf-1" -> "tf1")
     return name.lower().replace(" ", "").replace("-", "").replace("_", "").strip()
-# --- ADVANCED INTERPOLATION ENGINE ---
+
+# Helper initialization to safeguard nested multi-arrangement structure
+def verify_db_structure(vol, arr_name, p_amb, c_amb):
+    if vol not in st.session_state.db or not isinstance(st.session_state.db[vol], dict):
+        st.session_state.db[vol] = {}
+    
+    # Catch old layouts or non-existent arrangements
+    if arr_name not in st.session_state.db[vol] or not isinstance(st.session_state.db[vol][arr_name], dict):
+        st.session_state.db[vol][arr_name] = {}
+        
+    if p_amb not in st.session_state.db[vol][arr_name] or not isinstance(st.session_state.db[vol][arr_name][p_amb], dict):
+        st.session_state.db[vol][arr_name][p_amb] = {}
+        
+    if c_amb not in st.session_state.db[vol][arr_name][p_amb]:
+        st.session_state.db[vol][arr_name][p_amb][c_amb] = []
+
+# =================================================================
+# 4. ADVANCED INTERPOLATION ENGINE
+# =================================================================
 def run_automated_simulation(volume_records, new_pulldown, target_sensors):
     results_map = {}
     if not volume_records:
@@ -90,20 +127,9 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
             
     return results_map
 
-# Helper initialization to safeguard nested multi-arrangement structure
-def verify_db_structure(vol, arr_name, p_amb, c_amb):
-    if vol not in st.session_state.db or not isinstance(st.session_state.db[vol], dict):
-        st.session_state.db[vol] = {}
-    
-    # Catch old layouts or non-existent arrangements
-    if arr_name not in st.session_state.db[vol] or not isinstance(st.session_state.db[vol][arr_name], dict):
-        st.session_state.db[vol][arr_name] = {}
-        
-    if p_amb not in st.session_state.db[vol][arr_name] or not isinstance(st.session_state.db[vol][arr_name][p_amb], dict):
-        st.session_state.db[vol][arr_name][p_amb] = {}
-        
-    if c_amb not in st.session_state.db[vol][arr_name][p_amb]:
-        st.session_state.db[vol][arr_name][p_amb][c_amb] = []
+# =================================================================
+# 5. THE REST OF YOUR STREAMLIT UI CODE GOES BELOW HERE...
+# =================================================================
 
 # ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
 # Initialize unique tracking IDs for clearing inputs if they don't exist
@@ -281,6 +307,11 @@ with tab1:
                     for key_title, df_res in simulation_outputs.items():
                         st.markdown(f"### 📊 Predictions for {key_title}")
                         st.dataframe(df_res, use_container_width=True, hide_index=True)
+
+# ================= INITIALIZE STATE ON STARTUP =================
+# Run this before your tab containers to ensure historical models pull cleanly
+if "db" not in st.session_state:
+    st.session_state.db = load_memory_from_disk()
 
 # ================= TAB 2: DATA REPOSITORY ROOM =================
 with tab2:
@@ -505,10 +536,8 @@ with tab2:
                                 for target_offset in range(1, 11):
                                     if r_idx + target_offset < len(df_cpt_horiz):
                                         sub_row = df_cpt_horiz.iloc[r_idx + target_offset]
-                                        
                                         for c_idx in range(len(sub_row)):
                                             tag = str(sub_row.iloc[c_idx]).strip().lower().replace("-", "")
-                                            
                                             if tag in ["tf1", "tf2", "tf3", "tf4", "tf5"]:
                                                 try: flag_extracted[f"tf-{tag[-1]}"] = float(sub_row.iloc[c_idx + 1])
                                                 except (ValueError, TypeError): pass
@@ -536,21 +565,23 @@ with tab2:
                     except Exception: pass
 
                 # -------------------------------------------------------------
-                # 3. SAVE DATA MATRIX TO STORAGE (EXPANDED TO LAST 10 SETS)
+                # 3. SAVE DATA MATRIX AND FORCE RETENTION TO HARD DISK
                 # -------------------------------------------------------------
                 if not parsed_successfully or not cpt_structured:
-                    raise ValueError("CPT processing pipeline failed. The spreadsheet layout doesn't match known automation configurations.")
+                    raise ValueError("CPT processing pipeline failed. Spreadsheet structural pattern unknown.")
 
                 new_block = {"pulldown_data": p_extracted, "pulldown_baseline_sensor": resolved_sensor, "cpt_data": cpt_structured}
                 
                 verify_db_structure(selected_volume, selected_arrangement, p_repo_key, c_repo_key)
                 st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key].append(new_block)
                 
-                # Slicing updated from [-5:] to [-10:] to track up to 10 parsed dataset histories
+                # Keep up to 10 parsed dataset runs in history
                 st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key] = st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key][-10:]
                 
-                save_memory(st.session_state.db)
-                st.success(f"🚀 Model Simulator Trained successfully! Memory capacity expanded to capture up to 10 pairs.")
+                # CRITICAL: Save to disk instead of just session memory buffer!
+                save_memory_to_disk(st.session_state.db)
+                
+                st.success(f"🚀 Model Simulator Trained successfully! Hard-Backup saved to storage file context.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Compilation error parsing dataset rows: {str(e)}")

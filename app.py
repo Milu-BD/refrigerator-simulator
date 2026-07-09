@@ -127,9 +127,111 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
             
     return results_map
 
+
 # =================================================================
-# 5. THE REST OF YOUR STREAMLIT UI CODE GOES BELOW HERE...
+# 5. STREAMLIT USER INTERFACE (TABS) & REPOSITORY LOGIC
 # =================================================================
+
+# Create your layout tabs first
+tab1, tab2, tab3 = st.tabs(["Simulation Hub", "Data Repository Room", "Analytics"])
+
+with tab2:
+    st.header("Data Repository Room")
+    
+    # --- STEP 1: RENDER THE FILE UPLOADER FIRST ---
+    repo_cpt_file = st.file_uploader(
+        "Upload CPT Calculation Report (Excel)", 
+        type=["xlsx", "xls"],
+        key=st.session_state.cpt_file_key
+    )
+    
+    # --- STEP 2: RUN STRATEGY A ONLY IF A FILE IS PRESENT ---
+    if repo_cpt_file is not None:
+        
+        # Initialize processing variables safely to prevent NameErrors later
+        cpt_structured = {}
+        parsed_successfully = False
+        
+        try:
+            import openpyxl  
+            import pandas as pd
+
+            # Helper to handle cell parsing safely
+            def to_float(val):
+                try:
+                    if pd.isna(val) or str(val).strip().lower() in ['nan', '']:
+                        return 0.0
+                    return float(str(val).strip())
+                except (ValueError, TypeError):
+                    return 0.0
+
+            # 1. Open the file natively using openpyxl to check row visibility states
+            wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+            
+            # Target the layout sheet safely
+            sheet_name = 'CPT CALCULATION REPORT' if 'CPT CALCULATION REPORT' in wb.sheetnames else wb.sheetnames[0]
+            ws = wb[sheet_name]
+            
+            # 2. Extract data into standard pandas format while filtering hidden rows
+            visible_rows = []
+            for r_idx, row in enumerate(ws.iter_rows(values_only=False), start=1):
+                if ws.row_dimensions[r_idx].hidden:
+                    continue
+                    
+                row_values = [cell.value for cell in row]
+                visible_rows.append(row_values)
+                
+            # 3. Convert only the visible rows into your processing DataFrame
+            df_cpt = pd.DataFrame(visible_rows)
+            
+            # After stripping hidden rows, rows 1-8 are skipped, meaning index 8 onwards contains the actual report
+            df_cpt = df_cpt.iloc[8:] 
+            df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
+            
+            current_flag = "Unknown"
+            for _, r in df_cpt.iterrows():
+                val_f1 = str(r.iloc[0]).strip()           # Th Knob is in column A (0)
+                val_crit = str(r.iloc[1]).strip().lower() # Data Criteria is in column B (1)
+                
+                # Forward-fill the test flag context (e.g., level-5)
+                if val_f1 and val_f1 != 'nan' and val_f1 != current_flag:
+                    current_flag = val_f1
+                    
+                if current_flag not in cpt_structured:
+                    cpt_structured[current_flag] = {}
+                    
+                if val_crit in metric_types:
+                    cpt_structured[current_flag][val_crit] = {
+                        "tf-1": to_float(r.iloc[2]),   # Col C
+                        "tf-2": to_float(r.iloc[3]),   # Col D
+                        "tf-3": to_float(r.iloc[4]),   # Col E
+                        "tf-4": to_float(r.iloc[5]),   # Col F
+                        "tf-5": to_float(r.iloc[6]),   # Col G
+                        "tc-1": to_float(r.iloc[12]),  # Col M
+                        "tc-2": to_float(r.iloc[13]),  # Col N
+                        "tc-3": to_float(r.iloc[14]),  # Col O
+                        "tvc":  to_float(r.iloc[16]),  # Col Q (VC)
+                        "S2":   to_float(r.iloc[19]),  # Col T (S2)
+                        "Sensor": to_float(r.iloc[17]) # Col R (Sensor)
+                    }
+                    
+            if cpt_structured: 
+                parsed_successfully = True
+                st.success("✅ Excel data parsed successfully using Strategy A!")
+
+        except Exception as e: 
+            st.error(f"Debug Info Strategy A Error: {str(e)}")
+            
+    else:
+        st.info("💡 Please upload an Excel sheet to parse data coordinates.")
+
+
+# ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
+# Initialize unique tracking IDs for clearing inputs if they don't exist
+if "model_form_id" not in st.session_state:
+    st.session_state.model_form_id = 0
+if "arr_form_id" not in st.session_state:
+    st.session_state.arr_form_id = 1000
 
 # ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
 # Initialize unique tracking IDs for clearing inputs if they don't exist

@@ -313,6 +313,14 @@ with tab1:
 if "db" not in st.session_state:
     st.session_state.db = load_memory_from_disk()
 
+# =================================================================
+# 1. INITIALIZE KEY COUNTERS FOR THE FILE UPLOADERS (Put this near your startup state logic)
+# =================================================================
+if "p_file_key" not in st.session_state:
+    st.session_state.p_file_key = 0
+if "cpt_file_key" not in st.session_state:
+    st.session_state.cpt_file_key = 0
+
 # ================= TAB 2: DATA REPOSITORY ROOM =================
 with tab2:
     st.subheader(f"Onboard Lab Reports for [{selected_volume}] ({selected_arrangement})")
@@ -328,9 +336,19 @@ with tab2:
     
     col_f1, col_f2 = st.columns(2)
     with col_f1:
-        repo_pulldown_file = st.file_uploader(f"Upload Pulldown Excel ({repo_p_ambient})", type=["xlsx", "xls"], key=f"r_p_file_{p_repo_key}_{c_repo_key}")
+        # Dynamically controlled key using a counter inside session state
+        repo_pulldown_file = st.file_uploader(
+            f"Upload Pulldown Excel ({repo_p_ambient})", 
+            type=["xlsx", "xls"], 
+            key=f"r_p_file_{p_repo_key}_{c_repo_key}_v_{st.session_state.p_file_key}"
+        )
     with col_f2:
-        repo_cpt_file = st.file_uploader(f"Upload Respected CPT Excel ({repo_c_ambient})", type=["xlsx", "xls"], key=f"r_cpt_file_{p_repo_key}_{c_repo_key}")
+        # Dynamically controlled key using a counter inside session state
+        repo_cpt_file = st.file_uploader(
+            f"Upload Respected CPT Excel ({repo_c_ambient})", 
+            type=["xlsx", "xls"], 
+            key=f"r_cpt_file_{p_repo_key}_{c_repo_key}_v_{st.session_state.cpt_file_key}"
+        )
         
     if repo_pulldown_file and repo_cpt_file:
         if st.button("💾 Process and Train Simulator Memory Buffer", type="primary"):
@@ -574,12 +592,15 @@ with tab2:
                 
                 verify_db_structure(selected_volume, selected_arrangement, p_repo_key, c_repo_key)
                 st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key].append(new_block)
-                
-                # Keep up to 10 parsed dataset runs in history
                 st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key] = st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key][-10:]
                 
-                # CRITICAL: Save to disk instead of just session memory buffer!
                 save_memory_to_disk(st.session_state.db)
+                
+                # -------------------------------------------------------------
+                # 4. RESET FILE UPLOADERS BY INCREMENTING WIDGET KEYS
+                # -------------------------------------------------------------
+                st.session_state.p_file_key += 1
+                st.session_state.cpt_file_key += 1
                 
                 st.success(f"🚀 Model Simulator Trained successfully! Hard-Backup saved to storage file context.")
                 st.rerun()

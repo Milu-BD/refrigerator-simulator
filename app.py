@@ -1014,11 +1014,11 @@ with tab3:
                                 use_container_width=True,
                                 hide_index=True
                                 )
-                                st.text_area(
-                                    "📋 Copy Updated CPT Matrix",
-                                    value=edited_cpt_df.to_csv(sep="\t", index=False),
-                                    height=220
-                                    )
+                            st.text_area(
+                            "📋 Copy Updated CPT Matrix",
+                                value=edited_cpt_df.to_csv(sep="\t", index=False),
+                                height=220
+                                )
 
                         # -------------------------------------------------
                         # Detect whether reviewer changed any value

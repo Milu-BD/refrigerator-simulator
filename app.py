@@ -537,23 +537,17 @@ with tab2:
     # STRATEGY A : Visible Ambient Parser
 # -------------------------------------------------------------
             try:
-
-    import openpyxl
-
-    wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
-
-    if "ANALYSIS REPORT" in wb.sheetnames:
-        ws = wb["ANALYSIS REPORT"]
-    elif "CPT CALCULATION REPORT" in wb.sheetnames:
-        ws = wb["CPT CALCULATION REPORT"]
-    else:
-        ws = wb[wb.sheetnames[0]]
-
-    cpt_structured = {}
-
-    current_flag = None
-
-    for r in range(1, ws.max_row + 1):
+                import openpyxl
+                wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+                if "ANALYSIS REPORT" in wb.sheetnames:
+                    ws = wb["ANALYSIS REPORT"]
+                elif "CPT CALCULATION REPORT" in wb.sheetnames:
+                    ws = wb["CPT CALCULATION REPORT"]
+                else:
+                    ws = wb[wb.sheetnames[0]]
+                    cpt_structured = {}
+                    current_flag = None
+                    for r in range(1, ws.max_row + 1):
 
         # Skip hidden rows
         if ws.row_dimensions[r].hidden:

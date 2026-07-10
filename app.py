@@ -566,44 +566,52 @@ with tab2:
                         ws = wb[wb.sheetnames[0]]
 
                     cpt_structured = {}
-                    current_flag = None
+                    cpt_structured = {}
+
+                    # -------------------------------------------------
+                    # Locate the visible table automatically
+                    # -------------------------------------------------
+                    start_row = None
 
                     for r in range(1, ws.max_row + 1):
 
-                        # Skip hidden rows
                         if ws.row_dimensions[r].hidden:
                             continue
 
-                        colA = str(ws.cell(r, 1).value).strip() if ws.cell(r, 1).value is not None else ""
-                        colB = str(ws.cell(r, 2).value).strip().lower() if ws.cell(r, 2).value is not None else ""
+                        a = ws.cell(r, 1).value
+                        b = ws.cell(r, 2).value
 
-                        # Detect Test Flag
+                        if (
+                            isinstance(a, str)
+                            and isinstance(b, str)
+                            and a.strip().lower() == "th knob"
+                            and b.strip().lower() == "data criteria"
+                        ):
+                            start_row = r + 2
+                            break
+
+                    if start_row is None:
+                        raise Exception("Visible CPT table not found.")
+
+                    current_flag = None
+
+                    for r in range(start_row, ws.max_row + 1):
+
+                        if ws.row_dimensions[r].hidden:
+                            continue
+
+                        colA = ws.cell(r, 1).value
+                        colB = ws.cell(r, 2).value
+
+                        colA = "" if colA is None else str(colA).strip()
+                        colB = "" if colB is None else str(colB).strip().lower()
+
                         if "level" in colA.lower() or "boost" in colA.lower():
                             current_flag = colA
-
-                            if current_flag not in cpt_structured:
-                                cpt_structured[current_flag] = {}
-
-                            continue
 
                         if current_flag is None:
                             continue
 
-                        if colB not in ["mean", "min", "max", "(max+min)/2"]:
-                            continue
-
-                        if colB == "mean":
-                            s2 = to_float(ws.cell(r, 20).value)
-                        else:
-                            s2 = 0.0
-
-                        if colB == "min":
-                            sensor = to_float(ws.cell(r, 18).value)
-                        else:
-                            sensor = 0.0
-                            
-
-                        # ---------- Mean row ----------
                         if colB == "mean":
 
                             cpt_structured[current_flag] = {
@@ -625,7 +633,6 @@ with tab2:
                                 "Sensor": 0.0
                             }
 
-                        # ---------- Min row ----------
                         elif colB == "min":
 
                             if current_flag in cpt_structured:

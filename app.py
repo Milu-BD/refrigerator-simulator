@@ -102,7 +102,7 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
 
             for record in volume_records:
 
-                if flag not in record["cpt_data"]:
+                if flag not in record["original_cpt_data"]:
                     continue
 
                 p_base = (
@@ -110,7 +110,7 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
                     + [record["pulldown_baseline_sensor"]]
                 )
 
-                outputs = record["cpt_data"][flag]
+                outputs = record["original_cpt_data"][flag]
             y_vector = (
                 [outputs.get(f, 0.0) for f in tc_features]
                 + [
@@ -921,7 +921,7 @@ with tab3:
                     # Section A: Display Pulldown Data Summary Table
                     st.markdown("#### 🔹 Pulldown Baseline Layer Matrix")
 
-                    p_df = pd.DataFrame([record["pulldown_data"]])
+                    p_df = pd.DataFrame([record["original_pulldown_data"]])
 
                     edited_p_df = st.data_editor(
                         p_df,
@@ -948,7 +948,7 @@ with tab3:
                     
                     cpt_rows = []
 
-                    for flag_name, sensor_values in record["cpt_data"].items():
+                    for flag_name, sensor_values in record["original_cpt_data"].items():
 
                         row_entry = {
                             "Test Flag": flag_name,
@@ -1049,7 +1049,7 @@ with tab3:
 
                                 }
 
-                            record["cpt_data"] = new_cpt
+                            record["original_cpt_data"] = new_cpt
 
                             save_memory_to_disk(st.session_state.db)
 

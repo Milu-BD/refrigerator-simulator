@@ -1017,8 +1017,8 @@ with tab3:
                                 st.text_area(
                                     "📋 Copy Updated CPT Matrix",
                                     value=edited_cpt_df.to_csv(sep="\t", index=False),
-                                    ight=220
-                                )
+                                    height=220
+                                    )
 
                         # -------------------------------------------------
                         # Detect whether reviewer changed any value

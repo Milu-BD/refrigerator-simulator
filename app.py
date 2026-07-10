@@ -991,59 +991,66 @@ with tab3:
 
                         pulldown_changed = not edited_p_df.equals(p_df)
                         cpt_changed = not edited_cpt_df.equals(cpt_df)
+
                         dataset_changed = pulldown_changed or cpt_changed
-                        save_clicked = st.button(
-                            "💾 Save Edited Dataset",
-                            key=f"save_dataset_{run_idx}",
-                            type="primary",
-                            disabled=not dataset_changed
-                        )
+
                         if dataset_changed:
-                            st.success("Unsaved changes detected.")
-                            if st.button(
+
+                            st.success("🟡 Unsaved changes detected.")
+
+                            save_clicked = st.button(
                                 "💾 Save Edited Dataset",
                                 key=f"save_dataset_{run_idx}",
                                 type="primary"
-                            ):
-                                ...
-                            else:
-                                st.info("No changes made.")
+                            )
+
+                        else:
+
+                            st.info("No changes made.")
+
+                            save_clicked = False
+
                         if save_clicked:
 
-                                # Update Pulldown values
-                                record["pulldown_data"] = edited_p_df.iloc[0].to_dict()
+                            # -----------------------------
+                            # Save Pulldown Matrix
+                            # -----------------------------
+                            record["pulldown_data"] = edited_p_df.iloc[0].to_dict()
 
-                                # Update CPT values
-                                new_cpt = {}
+                            # -----------------------------
+                            # Save CPT Matrix
+                            # -----------------------------
+                            new_cpt = {}
 
-                                for _, row in edited_cpt_df.iterrows():
+                            for _, row in edited_cpt_df.iterrows():
 
-                                    flag = row["Test Flag"]
+                                flag = row["Test Flag"]
 
-                                    new_cpt[flag] = {
+                                new_cpt[flag] = {
 
-                                        "tf-1": float(row["tf-1"]),
-                                        "tf-2": float(row["tf-2"]),
-                                        "tf-3": float(row["tf-3"]),
-                                        "tf-4": float(row["tf-4"]),
-                                        "tf-5": float(row["tf-5"]),
+                                    "tf-1": float(row["tf-1"]),
+                                    "tf-2": float(row["tf-2"]),
+                                    "tf-3": float(row["tf-3"]),
+                                    "tf-4": float(row["tf-4"]),
+                                    "tf-5": float(row["tf-5"]),
 
-                                        "tc-1": float(row["tc-1"]),
-                                        "tc-2": float(row["tc-2"]),
-                                        "tc-3": float(row["tc-3"]),
+                                    "tc-1": float(row["tc-1"]),
+                                    "tc-2": float(row["tc-2"]),
+                                    "tc-3": float(row["tc-3"]),
 
-                                        "tvc": float(row["tvc"]),
-                                        "S2": float(row["S2"]),
-                                        "Sensor": float(row["Sensor"])
-                                    }
+                                    "tvc": float(row["tvc"]),
+                                    "S2": float(row["S2"]),
+                                    "Sensor": float(row["Sensor"])
 
-                                record["cpt_data"] = new_cpt
+                                }
 
-                                save_memory_to_disk(st.session_state.db)
+                            record["cpt_data"] = new_cpt
 
-                                st.success("✅ Dataset updated successfully.")
+                            save_memory_to_disk(st.session_state.db)
 
-                                st.rerun()
+                            st.success("✅ Dataset updated successfully.")
+
+                            st.rerun()
                     else:
                         st.warning(
                             "No CPT entries found inside this specific record block."

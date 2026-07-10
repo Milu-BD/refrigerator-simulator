@@ -1008,13 +1008,13 @@ with tab3:
                                     num_rows="fixed",
                                     key=f"cpt_editor_{run_idx}"
                                     )
-                             st.markdown("##### 📄 Original Uploaded CPT Matrix")
-                            st.dataframe(
+                                st.markdown("##### 📄 Original Uploaded CPT Matrix")
+                                st.dataframe(
                                     original_cpt_df,
                                     use_container_width=True,
                                     hide_index=True
                                     )
-                            st.text_area(
+                                st.text_area(
                                     "📋 Copy Updated CPT Matrix",
                                     value=edited_cpt_df.to_csv(sep="\t", index=False),
                                     height=220

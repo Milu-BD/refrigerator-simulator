@@ -1002,7 +1002,7 @@ with tab3:
                                 })
                             original_cpt_df = pd.DataFrame(original_cpt_rows)
                             edited_cpt_df = st.data_editor(
-                                t_df,
+                                cpt_df,
                                 use_container_width=True,
                                 hide_index=True,
                                 num_rows="fixed",

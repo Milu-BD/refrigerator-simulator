@@ -992,14 +992,14 @@ with tab3:
                                 "tf-2": sensor_values.get("tf-2", 0.0),
                                 "tf-3": sensor_values.get("tf-3", 0.0),
                                 "tf-4": sensor_values.get("tf-4", 0.0),
-                                ": sensor_values.get("tf-5", 0.0),
-                                1": sensor_values.get("tc-1", 0.0),
+                                "tf-5": sensor_values.get("tf-5", 0.0),
+                                "tc-1": sensor_values.get("tc-1", 0.0),
                                 "tc-2": sensor_values.get("tc-2", 0.0),
                                 "tc-3": sensor_values.get("tc-3", 0.0),
                                 "tvc": sensor_values.get("tvc", 0.0),
                                 "S2": sensor_values.get("S2", 0.0),
                                 "Sensor": sensor_values.get("Sensor", 0.0)
-                            })
+                                })
                             original_cpt_df = pd.DataFrame(original_cpt_rows)
                             edited_cpt_df = st.data_editor(
                                 t_df,

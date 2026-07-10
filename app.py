@@ -1023,7 +1023,6 @@ with tab3:
                             st.success("✅ Dataset updated successfully.")
 
                             st.rerun()
-                        )
                     else:
                         st.warning(
                             "No CPT entries found inside this specific record block."

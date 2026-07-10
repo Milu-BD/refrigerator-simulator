@@ -984,7 +984,7 @@ with tab3:
                         original_cpt_rows = []
                         for flag_name, sensor_values in record.get(
                             "original_cpt_data",
-                            rd["cpt_data"]
+                            record["cpt_data"]
                         ).items():
                             original_cpt_rows.append({
                                 "Test Flag": flag_name,

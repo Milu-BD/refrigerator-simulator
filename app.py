@@ -533,21 +533,25 @@ with tab2:
                 cpt_structured = {}
                 parsed_successfully = False
                 
-                # -------------------------------------------------------------
-    # STRATEGY A : Visible Ambient Parser
 # -------------------------------------------------------------
-            try:
-                import openpyxl
-                wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
-                if "ANALYSIS REPORT" in wb.sheetnames:
-                    ws = wb["ANALYSIS REPORT"]
-                elif "CPT CALCULATION REPORT" in wb.sheetnames:
-                    ws = wb["CPT CALCULATION REPORT"]
-                else:
-                    ws = wb[wb.sheetnames[0]]
-                    cpt_structured = {}
-                    current_flag = None
-                    for r in range(1, ws.max_row + 1):
+# STRATEGY A : Visible Ambient Parser
+# -------------------------------------------------------------
+try:
+    import openpyxl
+
+    wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+
+    if "ANALYSIS REPORT" in wb.sheetnames:
+        ws = wb["ANALYSIS REPORT"]
+    elif "CPT CALCULATION REPORT" in wb.sheetnames:
+        ws = wb["CPT CALCULATION REPORT"]
+    else:
+        ws = wb[wb.sheetnames[0]]
+
+    cpt_structured = {}
+    current_flag = None
+
+    for r in range(1, ws.max_row + 1):
 
         # Skip hidden rows
         if ws.row_dimensions[r].hidden:
@@ -558,6 +562,7 @@ with tab2:
 
         # Detect Test Flag
         if "level" in colA.lower() or "boost" in colA.lower():
+
             current_flag = colA
 
             if current_flag not in cpt_structured:
@@ -583,17 +588,17 @@ with tab2:
 
         cpt_structured[current_flag][colB] = {
 
-            "tf-1": to_float(ws.cell(r,3).value),
-            "tf-2": to_float(ws.cell(r,4).value),
-            "tf-3": to_float(ws.cell(r,5).value),
-            "tf-4": to_float(ws.cell(r,6).value),
-            "tf-5": to_float(ws.cell(r,7).value),
+            "tf-1": to_float(ws.cell(r, 3).value),
+            "tf-2": to_float(ws.cell(r, 4).value),
+            "tf-3": to_float(ws.cell(r, 5).value),
+            "tf-4": to_float(ws.cell(r, 6).value),
+            "tf-5": to_float(ws.cell(r, 7).value),
 
-            "tc-1": to_float(ws.cell(r,13).value),
-            "tc-2": to_float(ws.cell(r,14).value),
-            "tc-3": to_float(ws.cell(r,15).value),
+            "tc-1": to_float(ws.cell(r, 13).value),
+            "tc-2": to_float(ws.cell(r, 14).value),
+            "tc-3": to_float(ws.cell(r, 15).value),
 
-            "tvc": to_float(ws.cell(r,17).value),
+            "tvc": to_float(ws.cell(r, 17).value),
 
             "S2": s2,
 
@@ -601,13 +606,10 @@ with tab2:
         }
 
     if cpt_structured:
-
         parsed_successfully = True
-
         st.success("✅ Strategy A successful.")
 
 except Exception as e:
-
     st.write(f"Strategy A failed: {e}")
 
                 # --- STRATEGY B: 2nd Sheet Multi-Row Header Format ---

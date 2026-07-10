@@ -933,7 +933,7 @@ with tab3:
                         "Copy Pulldown Matrix",
                         value=p_df.to_csv(sep="\t", index=False),
                         height=180,
-                        key=f"copy_pulldown_{record_idx}"
+                        key="copy_pulldown_matrix"
                     )
                     
                     # Section B: Display CPT Multivariable Flags Data Matrix
@@ -973,7 +973,7 @@ with tab3:
                             "Copy CPT Matrix",
                             value=cpt_df.to_csv(sep="\t", index=False),
                             height=220,
-                            key=f"copy_cpt_{record_idx}"
+                            key="copy_cpt_matrix"
                         )
                     else:
                         st.warning(

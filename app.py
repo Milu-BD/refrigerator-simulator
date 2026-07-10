@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from sklearn.neighbors import KNeighborsRegressor
 import streamlit as st
+import copy
 
 # Must be the absolute first Streamlit command in the script
 st.set_page_config(page_title="Refrigerator Simulator Hub", layout="wide")
@@ -823,7 +824,15 @@ with tab2:
                 if not parsed_successfully or not cpt_structured:
                     raise ValueError("CPT processing pipeline failed. Spreadsheet structural pattern unknown.")
 
-                new_block = {"pulldown_data": p_extracted, "pulldown_baseline_sensor": resolved_sensor, "cpt_data": cpt_structured}
+                new_block = {
+                    "pulldown_baseline_sensor": resolved_sensor,
+                    # Permanent copy of uploaded data
+                    "original_pulldown_data": copy.deepcopy(p_extracted),
+                    "original_cpt_data": copy.deepcopy(cpt_structured),
+                    # Editable copy
+                    "pulldown_data": copy.deepcopy(p_extracted),
+                    "cpt_data": copy.deepcopy(cpt_structured)
+                }
                 
                 verify_db_structure(selected_volume, selected_arrangement, p_repo_key, c_repo_key)
                 st.session_state.db[selected_volume][selected_arrangement][p_repo_key][c_repo_key].append(new_block)
@@ -922,6 +931,12 @@ with tab3:
                     st.markdown("#### 🔹 Pulldown Baseline Layer Matrix")
 
                     p_df = pd.DataFrame([record["pulldown_data"]])
+                    original_p_df = pd.DataFrame([
+                        record.get(
+                            "original_pulldown_data",
+                            record["pulldown_data"]
+                        )
+                    ])
 
                     edited_p_df = st.data_editor(
                         p_df,
@@ -931,11 +946,6 @@ with tab3:
                         key=f"pulldown_editor_{run_idx}"
                     )
                     st.markdown("##### 📄 Original Uploaded Pulldown Matrix")
-                    st.dataframe(
-                        p_df,
-                        use_container_width=True,
-                        hide_index=True
-                    )
 
                     st.text_area(
                         "📋 Copy Updated Pulldown Matrix",
@@ -971,24 +981,44 @@ with tab3:
 
                     if cpt_rows:
                         cpt_df = pd.DataFrame(cpt_rows)
-                        edited_cpt_df = st.data_editor(
-                            cpt_df,
-                            use_container_width=True,
-                            hide_index=True,
-                            num_rows="fixed",
-                            key=f"cpt_editor_{run_idx}"
-                        )
-                        st.markdown("##### 📄 Original Uploaded CPT Matrix")
-                        st.dataframe(
-                            cpt_df,
-                            use_container_width=True,
-                            hide_index=True
-                        )
-                        st.text_area(
-                            "📋 Copy Updated CPT Matrix",
-                            value=edited_cpt_df.to_csv(sep="\t", index=False),
-                            height=220,
-                        )
+                        original_cpt_rows = []
+                        for flag_name, sensor_values in record.get(
+                            "original_cpt_data",
+                            pt_data"]
+                            ).items():
+                                original_cpt_rows.append({
+                                    "Test Flag": flag_name,
+                                    "tf-1": sensor_values.get("tf-1", 0.0),
+                                    "tf-2": sensor_values.get("tf-2", 0.0),
+                                    "tf-3": sensor_values.get("tf-3", 0.0),
+                                    "tf-4": sensor_values.get("tf-4", 0.0),
+                                    "tf-5": sensor_values.get("tf-5", 0.0),
+                                    "tc-1": sensor_values.get("tc-1", 0.0),
+                                    "tc-2": sensor_values.get("tc-2", 0.0),
+                                    "tc-3": sensor_values.get("tc-3", 0.0),
+                                    "tvc": sensor_values.get("tvc", 0.0),
+                                    "S2": sensor_values.get("S2", 0.0),
+                                    "Sensor": sensor_values.get("Sensor", 0.0)
+                                })
+                                original_cpt_df = pd.DataFrame(original_cpt_rows)
+                                edited_cpt_df = st.data_editor(
+                                    cpt_df,
+                                    use_container_width=True,
+                                    de_index=True,
+                                    num_rows="fixed",
+                                    key=f"cpt_editor_{run_idx}"
+                                )
+                                st.markdown("##### 📄 Original Uploaded CPT Matrix")
+                                st.dataframe(
+                                    original_cpt_df,
+                                    use_container_width=True,
+                                    hide_index=True
+                                )
+                                st.text_area(
+                                    "📋 Copy Updated CPT Matrix",
+                                    value=edited_cpt_df.to_csv(sep="\t", index=False),
+                                    height=220,
+                                )
 
                         # -------------------------------------------------
                         # Detect whether reviewer changed any value

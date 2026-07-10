@@ -985,7 +985,8 @@ with tab3:
                         for flag_name, sensor_values in record.get(
                             "original_cpt_data",
                             pt_data"]
-                            ).items():
+                            )
+                        .items():
                                 original_cpt_rows.append({
                                     "Test Flag": flag_name,
                                     "tf-1": sensor_values.get("tf-1", 0.0),

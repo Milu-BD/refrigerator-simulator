@@ -938,15 +938,9 @@ with tab3:
                     )
 
                     st.text_area(
-                        "Copy Pulldown Matrix",
-                        value=edited_p_df.to_csv(sep="\t", index=False),
-                        height=180,
-                    )
-                    st.text_area(
                         "📋 Copy Updated Pulldown Matrix",
                         value=edited_p_df.to_csv(sep="\t", index=False),
                         height=180,
-                        key=f"copy_pulldown_{run_idx}"
                     )
                     
                     # Section B: Display CPT Multivariable Flags Data Matrix

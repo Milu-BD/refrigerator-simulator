@@ -188,8 +188,7 @@ with tab2:
 # -------------------------------------------------------------
 # Automatically locate the table header
 # -------------------------------------------------------------
-header_row = None
-
+        header_row = None
 for i in range(len(df_cpt)):
     row = [str(x).strip().lower() if x is not None else "" for x in df_cpt.iloc[i]]
 

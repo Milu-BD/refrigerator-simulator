@@ -1001,6 +1001,7 @@ with tab3:
                                     "Sensor": sensor_values.get("Sensor", 0.0)
                                     })
                                 original_cpt_df = pd.DataFrame(original_cpt_rows)
+                                st.write("Creating CPT editor")
                                 edited_cpt_df = st.data_editor(
                                     cpt_df,
                                     use_container_width=True,

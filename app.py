@@ -946,6 +946,11 @@ with tab3:
                         key=f"pulldown_editor_{run_idx}"
                     )
                     st.markdown("##### 📄 Original Uploaded Pulldown Matrix")
+                    st.dataframe(
+                        original_p_df,
+                        use_container_width=True,
+                        hide_index=True
+                    )
 
                     st.text_area(
                         "📋 Copy Updated Pulldown Matrix",
@@ -982,43 +987,50 @@ with tab3:
                     if cpt_rows:
                         cpt_df = pd.DataFrame(cpt_rows)
                         original_cpt_rows = []
-                        for flag_name, sensor_values in record.get(
-                            "original_cpt_data",
-                            record["cpt_data"]
-                            ).items():
-                                original_cpt_rows.append({
-                                    "Test Flag": flag_name,
-                                    "tf-1": sensor_values.get("tf-1", 0.0),
-                                    "tf-2": sensor_values.get("tf-2", 0.0),
-                                    "tf-3": sensor_values.get("tf-3", 0.0),
-                                    "tf-4": sensor_values.get("tf-4", 0.0),
-                                    "tf-5": sensor_values.get("tf-5", 0.0),
-                                    "tc-1": sensor_values.get("tc-1", 0.0),
-                                    "tc-2": sensor_values.get("tc-2", 0.0),
-                                    "tc-3": sensor_values.get("tc-3", 0.0),
-                                    "tvc": sensor_values.get("tvc", 0.0),
-                                    "S2": sensor_values.get("S2", 0.0),
-                                    "Sensor": sensor_values.get("Sensor", 0.0)
-                                    })
-                                original_cpt_df = pd.DataFrame(original_cpt_rows)
-                                edited_cpt_df = st.data_editor(
-                                    cpt_df,
-                                    use_container_width=True,
-                                    hide_index=True,
-                                    num_rows="fixed",
-                                    key=f"cpt_editor_{run_idx}"
-                                    )
-                                st.markdown("##### 📄 Original Uploaded CPT Matrix")
-                                st.dataframe(
-                                    original_cpt_df,
-                                    use_container_width=True,
-                                    hide_index=True
-                                    )
-                                st.text_area(
-                                    "📋 Copy Updated CPT Matrix",
-                                    value=edited_cpt_df.to_csv(sep="\t", index=False),
-                                    height=220
-                                    )
+
+for flag_name, sensor_values in record.get(
+    "original_cpt_data",
+    record["cpt_data"]
+).items():
+
+    original_cpt_rows.append({
+        "Test Flag": flag_name,
+        "tf-1": sensor_values.get("tf-1", 0.0),
+        "tf-2": sensor_values.get("tf-2", 0.0),
+        "tf-3": sensor_values.get("tf-3", 0.0),
+        "tf-4": sensor_values.get("tf-4", 0.0),
+        "tf-5": sensor_values.get("tf-5", 0.0),
+        "tc-1": sensor_values.get("tc-1", 0.0),
+        "tc-2": sensor_values.get("tc-2", 0.0),
+        "tc-3": sensor_values.get("tc-3", 0.0),
+        "tvc": sensor_values.get("tvc", 0.0),
+        "S2": sensor_values.get("S2", 0.0),
+        "Sensor": sensor_values.get("Sensor", 0.0)
+    })
+
+original_cpt_df = pd.DataFrame(original_cpt_rows)
+
+edited_cpt_df = st.data_editor(
+    cpt_df,
+    use_container_width=True,
+    hide_index=True,
+    num_rows="fixed",
+    key=f"cpt_editor_{run_idx}"
+)
+
+st.markdown("##### 📄 Original Uploaded CPT Matrix")
+
+st.dataframe(
+    original_cpt_df,
+    use_container_width=True,
+    hide_index=True
+)
+
+st.text_area(
+    "📋 Copy Updated CPT Matrix",
+    value=edited_cpt_df.to_csv(sep="\t", index=False),
+    height=220
+)
 
                         # -------------------------------------------------
                         # Detect whether reviewer changed any value

@@ -940,7 +940,6 @@ with tab3:
                         "Copy Pulldown Matrix",
                         value=edited_p_df.to_csv(sep="\t", index=False),
                         height=180,
-                        disabled=True,
                         key=f"copy_pulldown_{run_idx}"
                     )
                     
@@ -983,7 +982,6 @@ with tab3:
                             "Copy CPT Matrix",
                             value=edited_cpt_df.to_csv(sep="\t", index=False),
                             height=220,
-                            disabled=True,
                             key=f"copy_cpt_{run_idx}"
                         )
 
@@ -993,14 +991,24 @@ with tab3:
 
                         pulldown_changed = not edited_p_df.equals(p_df)
                         cpt_changed = not edited_cpt_df.equals(cpt_df)
-
-                        if pulldown_changed or cpt_changed:
-
+                        dataset_changed = pulldown_changed or cpt_changed
+                        save_clicked = st.button(
+                            "💾 Save Edited Dataset",
+                            key=f"save_dataset_{run_idx}",
+                            type="primary",
+                            disabled=not dataset_changed
+                        )
+                        if dataset_changed:
+                            st.success("Unsaved changes detected.")
                             if st.button(
                                 "💾 Save Edited Dataset",
                                 key=f"save_dataset_{run_idx}",
                                 type="primary"
                             ):
+                                ...
+                            else:
+                                st.info("No changes made.")
+                        if save_clicked:
 
                                 # Update Pulldown values
                                 record["pulldown_data"] = edited_p_df.iloc[0].to_dict()

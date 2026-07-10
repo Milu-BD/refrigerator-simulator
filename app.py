@@ -64,10 +64,6 @@ def to_float(v):
         return float(v)
     except:
         return 0.0
-    ...
-
-def parse_visible_cpt(repo_cpt_file):
-    ...
 
 # Helper initialization to safeguard nested multi-arrangement structure
 def verify_db_structure(vol, arr_name, p_amb, c_amb):
@@ -155,31 +151,26 @@ with tab2:
     
     # --- STEP 1: RENDER THE FILE UPLOADER FIRST ---
     repo_cpt_file = st.file_uploader(
-        "Upload CPT Calculation Report (Excel)", 
-        type=["xlsx", "xls"],
-        key=st.session_state.cpt_file_key
+    "Upload CPT Calculation Report (Excel)",
+    type=["xlsx", "xls"],
+    key="repo_cpt_file"
     )
     
     # --- STEP 2: RUN STRATEGY A *ONLY* IF A FILE IS PRESENT ---
     if repo_cpt_file is not None:
         try:
-            import openpyxl  
-            import pandas as pd
-
-            # Helper to handle cell parsing safely
-            def to_float(val):
-                try:
-                    if pd.isna(val) or str(val).strip().lower() in ['nan', '']:
-                        return 0.0
-                    return float(str(val).strip())
-                except (ValueError, TypeError):
-                    return 0.0
+            import openpyxl
 
             # 1. Open the file natively using openpyxl to check row visibility states
             wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
             
             # Target the layout sheet safely
-            sheet_name = 'CPT CALCULATION REPORT' if 'CPT CALCULATION REPORT' in wb.sheetnames else wb.sheetnames[0]
+            if "ANALYSIS REPORT" in wb.sheetnames:
+    sheet_name = "ANALYSIS REPORT"
+elif "CPT CALCULATION REPORT" in wb.sheetnames:
+    sheet_name = "CPT CALCULATION REPORT"
+else:
+    sheet_name = wb.sheetnames[0]
             ws = wb[sheet_name]
             
             # 2. Extract data into standard pandas format while filtering hidden rows
@@ -194,9 +185,28 @@ with tab2:
             # 3. Convert only the visible rows into your processing DataFrame
             df_cpt = pd.DataFrame(visible_rows)
             
-            # After stripping hidden rows, rows 1-8 are skipped, meaning index 8 onwards contains the actual report
-            df_cpt = df_cpt.iloc[8:] 
-            df_cpt.dropna(subset=[df_cpt.columns[1], df_cpt.columns[2]], inplace=True)
+# -------------------------------------------------------------
+# Automatically locate the table header
+# -------------------------------------------------------------
+header_row = None
+
+for i in range(len(df_cpt)):
+    row = [str(x).strip().lower() if x is not None else "" for x in df_cpt.iloc[i]]
+
+    if "data criteria" in row and ("tf1" in row or "tf-1" in row):
+        header_row = i
+        break
+
+if header_row is None:
+    raise Exception("Unable to locate the CPT table header.")
+
+headers = df_cpt.iloc[header_row].tolist()
+
+df_cpt = df_cpt.iloc[header_row + 1:].reset_index(drop=True)
+
+df_cpt.columns = headers
+
+df_cpt.dropna(subset=["Data Criteria"], inplace=True)
             
             current_flag = "Unknown"
             for _, r in df_cpt.iterrows():
@@ -211,19 +221,36 @@ with tab2:
                     cpt_structured[current_flag] = {}
                     
                 if val_crit in metric_types:
-                    cpt_structured[current_flag][val_crit] = {
-                        "tf-1": to_float(r.iloc[2]),   # Col C
-                        "tf-2": to_float(r.iloc[3]),   # Col D
-                        "tf-3": to_float(r.iloc[4]),   # Col E
-                        "tf-4": to_float(r.iloc[5]),   # Col F
-                        "tf-5": to_float(r.iloc[6]),   # Col G
-                        "tc-1": to_float(r.iloc[12]),  # Col M
-                        "tc-2": to_float(r.iloc[13]),  # Col N
-                        "tc-3": to_float(r.iloc[14]),  # Col O
-                        "tvc":  to_float(r.iloc[16]),  # Col Q (VC)
-                        "S2":   to_float(r.iloc[19]),  # Col T (S2)
-                        "Sensor": to_float(r.iloc[17]) # Col R (Sensor)
-                    }
+                    # S2 should exist only in Mean
+if val_crit == "mean":
+    s2_value = to_float(r.iloc[19])
+else:
+    s2_value = 0.0
+
+# Sensor should exist only in Min
+if val_crit == "min":
+    sensor_value = to_float(r.iloc[17])
+else:
+    sensor_value = 0.0
+
+cpt_structured[current_flag][val_crit] = {
+
+    "tf-1": to_float(r.iloc[2]),
+    "tf-2": to_float(r.iloc[3]),
+    "tf-3": to_float(r.iloc[4]),
+    "tf-4": to_float(r.iloc[5]),
+    "tf-5": to_float(r.iloc[6]),
+
+    "tc-1": to_float(r.iloc[12]),
+    "tc-2": to_float(r.iloc[13]),
+    "tc-3": to_float(r.iloc[14]),
+
+    "tvc": to_float(r.iloc[16]),
+
+    "S2": s2_value,
+
+    "Sensor": sensor_value
+}
                     
             if cpt_structured: 
                 parsed_successfully = True

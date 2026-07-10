@@ -184,74 +184,78 @@ with tab2:
                 
             # 3. Convert only the visible rows into your processing DataFrame
             df_cpt = pd.DataFrame(visible_rows)
-            
-# -------------------------------------------------------------
-# Automatically locate the table header
-# -------------------------------------------------------------
-        header_row = None
-for i in range(len(df_cpt)):
-    row = [str(x).strip().lower() if x is not None else "" for x in df_cpt.iloc[i]]
 
-    if "data criteria" in row and ("tf1" in row or "tf-1" in row):
-        header_row = i
-        break
+            # -------------------------------------------------------------
+            # Automatically locate the table header
+            # -------------------------------------------------------------
+            header_row = None
 
-if header_row is None:
-    raise Exception("Unable to locate the CPT table header.")
+            for i in range(len(df_cpt)):
+                row = [str(x).strip().lower() if x is not None else "" for x in df_cpt.iloc[i]]
 
-headers = df_cpt.iloc[header_row].tolist()
+                if "data criteria" in row and ("tf1" in row or "tf-1" in row):
+                    header_row = i
+                    break
 
-df_cpt = df_cpt.iloc[header_row + 1:].reset_index(drop=True)
+            if header_row is None:
+                raise Exception("Unable to locate the CPT table header.")
 
-df_cpt.columns = headers
+            headers = df_cpt.iloc[header_row].tolist()
 
-df_cpt.dropna(subset=["Data Criteria"], inplace=True)
-            
+            df_cpt = df_cpt.iloc[header_row + 1:].reset_index(drop=True)
+
+            df_cpt.columns = headers
+
+            df_cpt.dropna(subset=["Data Criteria"], inplace=True)
+
             current_flag = "Unknown"
+
             for _, r in df_cpt.iterrows():
-                val_f1 = str(r.iloc[0]).strip()           # Th Knob is in column A (0)
-                val_crit = str(r.iloc[1]).strip().lower() # Data Criteria is in column B (1)
-                
-                # Forward-fill the test flag context (e.g., level-5)
-                if val_f1 and val_f1 != 'nan' and val_f1 != current_flag:
+
+                val_f1 = str(r.iloc[0]).strip()
+                val_crit = str(r.iloc[1]).strip().lower()
+
+                # Forward-fill Test Flag
+                if val_f1 and val_f1 != "nan" and val_f1 != current_flag:
                     current_flag = val_f1
-                    
+
                 if current_flag not in cpt_structured:
                     cpt_structured[current_flag] = {}
-                    
+
                 if val_crit in metric_types:
-                    # S2 should exist only in Mean
-if val_crit == "mean":
-    s2_value = to_float(r.iloc[19])
-else:
-    s2_value = 0.0
 
-# Sensor should exist only in Min
-if val_crit == "min":
-    sensor_value = to_float(r.iloc[17])
-else:
-    sensor_value = 0.0
+                    # S2 → Mean only
+                    if val_crit == "mean":
+                        s2_value = to_float(r.iloc[19])
+                    else:
+                        s2_value = 0.0
 
-cpt_structured[current_flag][val_crit] = {
+                    # Sensor → Min only
+                    if val_crit == "min":
+                        sensor_value = to_float(r.iloc[17])
+                    else:
+                        sensor_value = 0.0
 
-    "tf-1": to_float(r.iloc[2]),
-    "tf-2": to_float(r.iloc[3]),
-    "tf-3": to_float(r.iloc[4]),
-    "tf-4": to_float(r.iloc[5]),
-    "tf-5": to_float(r.iloc[6]),
+                    cpt_structured[current_flag][val_crit] = {
 
-    "tc-1": to_float(r.iloc[12]),
-    "tc-2": to_float(r.iloc[13]),
-    "tc-3": to_float(r.iloc[14]),
+                        "tf-1": to_float(r.iloc[2]),
+                        "tf-2": to_float(r.iloc[3]),
+                        "tf-3": to_float(r.iloc[4]),
+                        "tf-4": to_float(r.iloc[5]),
+                        "tf-5": to_float(r.iloc[6]),
 
-    "tvc": to_float(r.iloc[16]),
+                        "tc-1": to_float(r.iloc[12]),
+                        "tc-2": to_float(r.iloc[13]),
+                        "tc-3": to_float(r.iloc[14]),
 
-    "S2": s2_value,
+                        "tvc": to_float(r.iloc[16]),
 
-    "Sensor": sensor_value
-}
-                    
-            if cpt_structured: 
+                        "S2": s2_value,
+
+                        "Sensor": sensor_value
+                    }
+
+            if cpt_structured:
                 parsed_successfully = True
                 st.success("✅ Excel data parsed successfully using Strategy A!")
 

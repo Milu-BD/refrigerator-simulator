@@ -935,8 +935,13 @@ with tab3:
                         "Copy Pulldown Matrix",
                         value=edited_p_df.to_csv(sep="\t", index=False),
                         height=180,
-                        key=f"copy_pulldown_{run_idx}"
-                    )
+                        st.text_area(
+                            "Copy Pulldown Matrix",
+                            value=edited_p_df.to_csv(sep="\t", index=False),
+                            height=180,
+                            disabled=True,
+                            key=f"copy_pulldown_{run_idx}"
+                        )
                     
                     # Section B: Display CPT Multivariable Flags Data Matrix
                     st.markdown("#### 🔹 Connected CPT Multi-Format Condition Flags")
@@ -977,52 +982,59 @@ with tab3:
                             "Copy CPT Matrix",
                             value=edited_cpt_df.to_csv(sep="\t", index=False),
                             height=220,
+                            disabled=True,
                             key=f"copy_cpt_{run_idx}"
                         )
 
-                        if st.button(
-                            "💾 Save Edited Dataset",
-                            key=f"save_dataset_{run_idx}"
-                        ):
+                        # -------------------------------------------------
+                        # Detect whether reviewer changed any value
+                        # -------------------------------------------------
 
-                            # -----------------------------
-                            # Save Pulldown values
-                            # -----------------------------
-                            record["pulldown_data"] = edited_p_df.iloc[0].to_dict()
+                        pulldown_changed = not edited_p_df.equals(p_df)
+                        cpt_changed = not edited_cpt_df.equals(cpt_df)
 
-                            # -----------------------------
-                            # Save CPT values
-                            # -----------------------------
-                            new_cpt = {}
+                        if pulldown_changed or cpt_changed:
 
-                            for _, row in edited_cpt_df.iterrows():
+                            if st.button(
+                                "💾 Save Edited Dataset",
+                                key=f"save_dataset_{run_idx}",
+                                type="primary"
+                            ):
 
-                                flag = row["Test Flag"]
+                                # Update Pulldown values
+                                record["pulldown_data"] = edited_p_df.iloc[0].to_dict()
 
-                                new_cpt[flag] = {
+                                # Update CPT values
+                                new_cpt = {}
 
-                                    "tf-1": float(row["tf-1"]),
-                                    "tf-2": float(row["tf-2"]),
-                                    "tf-3": float(row["tf-3"]),
-                                    "tf-4": float(row["tf-4"]),
-                                    "tf-5": float(row["tf-5"]),
+                                for _, row in edited_cpt_df.iterrows():
 
-                                    "tc-1": float(row["tc-1"]),
-                                    "tc-2": float(row["tc-2"]),
-                                    "tc-3": float(row["tc-3"]),
+                                    flag = row["Test Flag"]
 
-                                    "tvc": float(row["tvc"]),
-                                    "S2": float(row["S2"]),
-                                    "Sensor": float(row["Sensor"])
-                                }
+                                    new_cpt[flag] = {
 
-                            record["cpt_data"] = new_cpt
+                                        "tf-1": float(row["tf-1"]),
+                                        "tf-2": float(row["tf-2"]),
+                                        "tf-3": float(row["tf-3"]),
+                                        "tf-4": float(row["tf-4"]),
+                                        "tf-5": float(row["tf-5"]),
 
-                            save_memory_to_disk(st.session_state.db)
+                                        "tc-1": float(row["tc-1"]),
+                                        "tc-2": float(row["tc-2"]),
+                                        "tc-3": float(row["tc-3"]),
 
-                            st.success("✅ Dataset updated successfully.")
+                                        "tvc": float(row["tvc"]),
+                                        "S2": float(row["S2"]),
+                                        "Sensor": float(row["Sensor"])
+                                    }
 
-                            st.rerun()
+                                record["cpt_data"] = new_cpt
+
+                                save_memory_to_disk(st.session_state.db)
+
+                                st.success("✅ Dataset updated successfully.")
+
+                                st.rerun()
                     else:
                         st.warning(
                             "No CPT entries found inside this specific record block."

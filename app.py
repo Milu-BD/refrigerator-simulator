@@ -920,16 +920,20 @@ with tab3:
 
                     # Section A: Display Pulldown Data Summary Table
                     st.markdown("#### 🔹 Pulldown Baseline Layer Matrix")
-                    p_df = pd.DataFrame([record['pulldown_data']])
+
+                    p_df = pd.DataFrame([record["pulldown_data"]])
+
                     st.dataframe(
-                        pulldown_df,
+                        p_df,
                         use_container_width=True,
                         hide_index=True
                     )
+
                     st.text_area(
                         "Copy Pulldown Matrix",
-                        pulldown_df.to_csv(sep="\t", index=False),
-                        height=180
+                        value=p_df.to_csv(sep="\t", index=False),
+                        height=180,
+                        key=f"copy_pulldown_{record_idx}"
                     )
                     
                     # Section B: Display CPT Multivariable Flags Data Matrix
@@ -967,8 +971,9 @@ with tab3:
                         )
                         st.text_area(
                             "Copy CPT Matrix",
-                            cpt_df.to_csv(sep="\t", index=False),
-                            height=220
+                            value=cpt_df.to_csv(sep="\t", index=False),
+                            height=220,
+                            key=f"copy_cpt_{record_idx}"
                         )
                     else:
                         st.warning(

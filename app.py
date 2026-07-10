@@ -930,6 +930,12 @@ with tab3:
                         num_rows="fixed",
                         key=f"pulldown_editor_{run_idx}"
                     )
+                    st.markdown("##### 📄 Original Uploaded Pulldown Matrix")
+                    st.dataframe(
+                        p_df,
+                        use_container_width=True,
+                        hide_index=True
+                    )
 
                     st.text_area(
                         "Copy Pulldown Matrix",
@@ -937,7 +943,7 @@ with tab3:
                         height=180,
                     )
                     st.text_area(
-                        "Copy Pulldown Matrix",
+                        "📋 Copy Updated Pulldown Matrix",
                         value=edited_p_df.to_csv(sep="\t", index=False),
                         height=180,
                         key=f"copy_pulldown_{run_idx}"
@@ -978,8 +984,14 @@ with tab3:
                             num_rows="fixed",
                             key=f"cpt_editor_{run_idx}"
                         )
+                        st.markdown("##### 📄 Original Uploaded CPT Matrix")
+                        st.dataframe(
+                            cpt_df,
+                            use_container_width=True,
+                            hide_index=True
+                        )
                         st.text_area(
-                            "Copy CPT Matrix",
+                            "📋 Copy Updated CPT Matrix",
                             value=edited_cpt_df.to_csv(sep="\t", index=False),
                             height=220,
                             key=f"copy_cpt_{run_idx}"

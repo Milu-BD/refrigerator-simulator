@@ -923,15 +923,17 @@ with tab3:
 
                     p_df = pd.DataFrame([record["pulldown_data"]])
 
-                    st.dataframe(
+                    edited_p_df = st.data_editor(
                         p_df,
                         use_container_width=True,
-                        hide_index=True
+                        hide_index=True,
+                        num_rows="fixed",
+                        key=f"pulldown_editor_{run_idx}"
                     )
 
                     st.text_area(
                         "Copy Pulldown Matrix",
-                        value=p_df.to_csv(sep="\t", index=False),
+                        value=edited_p_df.to_csv(sep="\t", index=False),
                         height=180,
                         key=f"copy_pulldown_{run_idx}"
                     )
@@ -964,16 +966,63 @@ with tab3:
 
                     if cpt_rows:
                         cpt_df = pd.DataFrame(cpt_rows)
-                        st.dataframe(
+                        edited_cpt_df = st.data_editor(
                             cpt_df,
                             use_container_width=True,
-                            hide_index=True
+                            hide_index=True,
+                            num_rows="fixed",
+                            key=f"cpt_editor_{run_idx}"
                         )
                         st.text_area(
                             "Copy CPT Matrix",
-                            value=cpt_df.to_csv(sep="\t", index=False),
+                            value=edited_cpt_df.to_csv(sep="\t", index=False),
                             height=220,
                             key=f"copy_cpt_{run_idx}"
+                        )
+
+                        if st.button(
+                            "💾 Save Edited Dataset",
+                            key=f"save_dataset_{run_idx}"
+                        ):
+
+                            # -----------------------------
+                            # Save Pulldown values
+                            # -----------------------------
+                            record["pulldown_data"] = edited_p_df.iloc[0].to_dict()
+
+                            # -----------------------------
+                            # Save CPT values
+                            # -----------------------------
+                            new_cpt = {}
+
+                            for _, row in edited_cpt_df.iterrows():
+
+                                flag = row["Test Flag"]
+
+                                new_cpt[flag] = {
+
+                                    "tf-1": float(row["tf-1"]),
+                                    "tf-2": float(row["tf-2"]),
+                                    "tf-3": float(row["tf-3"]),
+                                    "tf-4": float(row["tf-4"]),
+                                    "tf-5": float(row["tf-5"]),
+
+                                    "tc-1": float(row["tc-1"]),
+                                    "tc-2": float(row["tc-2"]),
+                                    "tc-3": float(row["tc-3"]),
+
+                                    "tvc": float(row["tvc"]),
+                                    "S2": float(row["S2"]),
+                                    "Sensor": float(row["Sensor"])
+                                }
+
+                            record["cpt_data"] = new_cpt
+
+                            save_memory_to_disk(st.session_state.db)
+
+                            st.success("✅ Dataset updated successfully.")
+
+                            st.rerun()
                         )
                     else:
                         st.warning(

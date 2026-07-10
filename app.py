@@ -119,15 +119,20 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
                     
                     row = {
                         "TestFlag": flag,
-                        "Data Criteria": metric,
-                        "tf-1": round(prediction[0], 2), "tf-2": round(prediction[1], 2),
-                        "tf-3": round(prediction[2], 2), "tf-4": round(prediction[3], 2),
-                        "tf-5": round(prediction[4], 2), "tc-1": round(prediction[5], 2),
-                        "tc-2": round(prediction[6], 2), "tc-3": round(prediction[7], 2),
-                        "tvc": round(prediction[8], 2),  "S2": round(prediction[9], 2),
+                        "tf-1": round(prediction[0], 2),
+                        "tf-2": round(prediction[1], 2),
+                        "tf-3": round(prediction[2], 2),
+                        "tf-4": round(prediction[3], 2),
+                        "tf-5": round(prediction[4], 2),
+
+                        "tc-1": round(prediction[5], 2),
+                        "tc-2": round(prediction[6], 2),
+                        "tc-3": round(prediction[7], 2),
+
+                        "tvc": round(prediction[8], 2),
+                        "S2": round(prediction[9], 2),
                         "Sensor": round(prediction[10], 2)
                     }
-                    predicted_modes.append(row)
                     
         if predicted_modes:
             results_map[f"Target Sensor Set {idx+1} ({target_s}°C)"] = pd.DataFrame(predicted_modes)
@@ -584,25 +589,38 @@ with tab2:
                             sensor = to_float(ws.cell(r, 18).value)
                         else:
                             sensor = 0.0
+                            
 
-                        cpt_structured[current_flag][colB] = {
+                        # ---------- Mean row ----------
+                        if colB == "mean":
 
-                            "tf-1": to_float(ws.cell(r, 3).value),
-                            "tf-2": to_float(ws.cell(r, 4).value),
-                            "tf-3": to_float(ws.cell(r, 5).value),
-                            "tf-4": to_float(ws.cell(r, 6).value),
-                            "tf-5": to_float(ws.cell(r, 7).value),
+                            cpt_structured[current_flag] = {
 
-                            "tc-1": to_float(ws.cell(r, 13).value),
-                            "tc-2": to_float(ws.cell(r, 14).value),
-                            "tc-3": to_float(ws.cell(r, 15).value),
+                                "tf-1": to_float(ws.cell(r, 3).value),
+                                "tf-2": to_float(ws.cell(r, 4).value),
+                                "tf-3": to_float(ws.cell(r, 5).value),
+                                "tf-4": to_float(ws.cell(r, 6).value),
+                                "tf-5": to_float(ws.cell(r, 7).value),
 
-                            "tvc": to_float(ws.cell(r, 17).value),
+                                "tc-1": to_float(ws.cell(r, 13).value),
+                                "tc-2": to_float(ws.cell(r, 14).value),
+                                "tc-3": to_float(ws.cell(r, 15).value),
 
-                            "S2": s2,
+                                "tvc": to_float(ws.cell(r, 17).value),
 
-                            "Sensor": sensor
-                        }
+                                "S2": to_float(ws.cell(r, 20).value),
+
+                                "Sensor": 0.0
+                            }
+
+                        # ---------- Min row ----------
+                        elif colB == "min":
+
+                            if current_flag in cpt_structured:
+
+                                cpt_structured[current_flag]["Sensor"] = to_float(
+                                    ws.cell(r, 18).value
+                                )
 
                     if cpt_structured:
                         parsed_successfully = True
@@ -890,17 +908,36 @@ with tab3:
                     st.markdown("#### 🔹 Connected CPT Multi-Format Condition Flags")
                     
                     cpt_rows = []
-                    for flag_name, flag_metrics in record['cpt_data'].items():
-                        for metric_name, sensor_values in flag_metrics.items():
-                            row_entry = {
-                                "Test Flag": flag_name,
-                                "Data Criteria": metric_name,
-                            }
-                            row_entry.update(sensor_values)
-                            cpt_rows.append(row_entry)
-                    
+
+                    for flag_name, sensor_values in record["cpt_data"].items():
+
+                        row_entry = {
+                            "Test Flag": flag_name,
+                            "tf-1": sensor_values.get("tf-1", 0.0),
+                            "tf-2": sensor_values.get("tf-2", 0.0),
+                            "tf-3": sensor_values.get("tf-3", 0.0),
+                            "tf-4": sensor_values.get("tf-4", 0.0),
+                            "tf-5": sensor_values.get("tf-5", 0.0),
+
+                            "tc-1": sensor_values.get("tc-1", 0.0),
+                            "tc-2": sensor_values.get("tc-2", 0.0),
+                            "tc-3": sensor_values.get("tc-3", 0.0),
+
+                            "tvc": sensor_values.get("tvc", 0.0),
+                            "S2": sensor_values.get("S2", 0.0),
+                            "Sensor": sensor_values.get("Sensor", 0.0)
+                        }
+
+                        cpt_rows.append(row_entry)
+
                     if cpt_rows:
                         cpt_df = pd.DataFrame(cpt_rows)
-                        st.dataframe(cpt_df, use_container_width=True, hide_index=True)
+                        st.dataframe(
+                            cpt_df,
+                            use_container_width=True,
+                            hide_index=True
+                        )
                     else:
-                        st.warning("No metric matrix entries found inside this specific record block.")
+                        st.warning(
+                            "No CPT entries found inside this specific record block."
+                        )

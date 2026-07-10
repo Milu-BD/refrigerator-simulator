@@ -921,7 +921,7 @@ with tab3:
                     # Section A: Display Pulldown Data Summary Table
                     st.markdown("#### 🔹 Pulldown Baseline Layer Matrix")
 
-                    p_df = pd.DataFrame([record["original_pulldown_data"]])
+                    p_df = pd.DataFrame([record["pulldown_data"]])
 
                     edited_p_df = st.data_editor(
                         p_df,

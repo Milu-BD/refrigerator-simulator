@@ -935,6 +935,7 @@ with tab3:
                         "Copy Pulldown Matrix",
                         value=edited_p_df.to_csv(sep="\t", index=False),
                         height=180,
+                    )
                         st.text_area(
                             "Copy Pulldown Matrix",
                             value=edited_p_df.to_csv(sep="\t", index=False),

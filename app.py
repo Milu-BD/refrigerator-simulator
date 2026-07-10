@@ -988,7 +988,6 @@ with tab3:
                             "📋 Copy Updated CPT Matrix",
                             value=edited_cpt_df.to_csv(sep="\t", index=False),
                             height=220,
-                            key=f"copy_cpt_{run_idx}"
                         )
 
                         # -------------------------------------------------

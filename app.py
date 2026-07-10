@@ -533,84 +533,83 @@ with tab2:
                 cpt_structured = {}
                 parsed_successfully = False
 
+                                # -------------------------------------------------------------
+                # STRATEGY A : Visible Ambient Parser
                 # -------------------------------------------------------------
-# STRATEGY A : Visible Ambient Parser
-# -------------------------------------------------------------
-try:
-    import openpyxl
+                try:
+                    import openpyxl
 
-    wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+                    wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
 
-    if "ANALYSIS REPORT" in wb.sheetnames:
-        ws = wb["ANALYSIS REPORT"]
-    elif "CPT CALCULATION REPORT" in wb.sheetnames:
-        ws = wb["CPT CALCULATION REPORT"]
-    else:
-        ws = wb[wb.sheetnames[0]]
+                    if "ANALYSIS REPORT" in wb.sheetnames:
+                        ws = wb["ANALYSIS REPORT"]
+                    elif "CPT CALCULATION REPORT" in wb.sheetnames:
+                        ws = wb["CPT CALCULATION REPORT"]
+                    else:
+                        ws = wb[wb.sheetnames[0]]
 
-    cpt_structured = {}
-    current_flag = None
+                    cpt_structured = {}
+                    current_flag = None
 
-    for r in range(1, ws.max_row + 1):
+                    for r in range(1, ws.max_row + 1):
 
-        # Skip hidden rows
-        if ws.row_dimensions[r].hidden:
-            continue
+                        # Skip hidden rows
+                        if ws.row_dimensions[r].hidden:
+                            continue
 
-        colA = str(ws.cell(r, 1).value).strip() if ws.cell(r, 1).value is not None else ""
-        colB = str(ws.cell(r, 2).value).strip().lower() if ws.cell(r, 2).value is not None else ""
+                        colA = str(ws.cell(r, 1).value).strip() if ws.cell(r, 1).value is not None else ""
+                        colB = str(ws.cell(r, 2).value).strip().lower() if ws.cell(r, 2).value is not None else ""
 
-        # Detect Test Flag
-        if "level" in colA.lower() or "boost" in colA.lower():
+                        # Detect Test Flag
+                        if "level" in colA.lower() or "boost" in colA.lower():
+                            current_flag = colA
 
-            current_flag = colA
+                            if current_flag not in cpt_structured:
+                                cpt_structured[current_flag] = {}
 
-            if current_flag not in cpt_structured:
-                cpt_structured[current_flag] = {}
+                            continue
 
-            continue
+                        if current_flag is None:
+                            continue
 
-        if current_flag is None:
-            continue
+                        if colB not in ["mean", "min", "max", "(max+min)/2"]:
+                            continue
 
-        if colB not in ["mean", "min", "max", "(max+min)/2"]:
-            continue
+                        if colB == "mean":
+                            s2 = to_float(ws.cell(r, 20).value)
+                        else:
+                            s2 = 0.0
 
-        if colB == "mean":
-            s2 = to_float(ws.cell(r, 20).value)
-        else:
-            s2 = 0.0
+                        if colB == "min":
+                            sensor = to_float(ws.cell(r, 18).value)
+                        else:
+                            sensor = 0.0
 
-        if colB == "min":
-            sensor = to_float(ws.cell(r, 18).value)
-        else:
-            sensor = 0.0
+                        cpt_structured[current_flag][colB] = {
 
-        cpt_structured[current_flag][colB] = {
+                            "tf-1": to_float(ws.cell(r, 3).value),
+                            "tf-2": to_float(ws.cell(r, 4).value),
+                            "tf-3": to_float(ws.cell(r, 5).value),
+                            "tf-4": to_float(ws.cell(r, 6).value),
+                            "tf-5": to_float(ws.cell(r, 7).value),
 
-            "tf-1": to_float(ws.cell(r, 3).value),
-            "tf-2": to_float(ws.cell(r, 4).value),
-            "tf-3": to_float(ws.cell(r, 5).value),
-            "tf-4": to_float(ws.cell(r, 6).value),
-            "tf-5": to_float(ws.cell(r, 7).value),
+                            "tc-1": to_float(ws.cell(r, 13).value),
+                            "tc-2": to_float(ws.cell(r, 14).value),
+                            "tc-3": to_float(ws.cell(r, 15).value),
 
-            "tc-1": to_float(ws.cell(r, 13).value),
-            "tc-2": to_float(ws.cell(r, 14).value),
-            "tc-3": to_float(ws.cell(r, 15).value),
+                            "tvc": to_float(ws.cell(r, 17).value),
 
-            "tvc": to_float(ws.cell(r, 17).value),
+                            "S2": s2,
 
-            "S2": s2,
+                            "Sensor": sensor
+                        }
 
-            "Sensor": sensor
-        }
+                    if cpt_structured:
+                        parsed_successfully = True
+                        st.success("✅ Strategy A successful.")
 
-    if cpt_structured:
-        parsed_successfully = True
-        st.success("✅ Strategy A successful.")
-
-except Exception as e:
-    st.write(f"Strategy A failed: {e}")
+                except Exception as e:
+                    st.write(f"Strategy A failed: {e}")
 
                 # --- STRATEGY B: 2nd Sheet Multi-Row Header Format ---
                 if not parsed_successfully:

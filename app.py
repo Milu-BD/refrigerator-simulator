@@ -96,21 +96,33 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
                 all_flags.add(flag)
                 
         for flag in sorted(all_flags):
-            for metric in metric_types:
-                X_train, y_train = [], []
-                
-                for record in volume_records:
-                    if flag not in record['cpt_data'] or metric not in record['cpt_data'][flag]:
-                        continue
-                    
-                    p_base = [record['pulldown_data'].get(f, 0.0) for f in tc_features] + [record['pulldown_baseline_sensor']]
-                    outputs = record['cpt_data'][flag][metric]
-                    y_vector = [outputs.get(f, 0.0) for f in tc_features] + [outputs.get('S2', 0.0), outputs.get('Sensor', 0.0)]
-                    
-                    X_train.append(p_base)
-                    y_train.append(y_vector)
-                
-                if len(X_train) >= 1:
+
+            X_train = []
+            y_train = []
+
+            for record in volume_records:
+
+                if flag not in record["cpt_data"]:
+                    continue
+
+                p_base = (
+                    [record["pulldown_data"].get(f, 0.0) for f in tc_features]
+                    + [record["pulldown_baseline_sensor"]]
+                )
+
+                outputs = record["cpt_data"][flag]
+            y_vector = (
+                [outputs.get(f, 0.0) for f in tc_features]
+                + [
+                    outputs.get("S2", 0.0),
+                    outputs.get("Sensor", 0.0)
+                ]
+            )
+
+            X_train.append(p_base)
+            y_train.append(y_vector)
+
+        if len(X_train) >= 1:
                     knn = KNeighborsRegressor(n_neighbors=min(2, len(X_train)), weights='distance')
                     knn.fit(X_train, y_train)
                     

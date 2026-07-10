@@ -628,7 +628,7 @@ with tab2:
 
                                 "tvc": to_float(ws.cell(r, 17).value),
 
-                                "S2": to_float(ws.cell(r, 20).value),
+                                "S2": to_float(ws.cell(r, 21).value),
 
                                 "Sensor": 0.0
                             }
@@ -638,7 +638,7 @@ with tab2:
                             if current_flag in cpt_structured:
 
                                 cpt_structured[current_flag]["Sensor"] = to_float(
-                                    ws.cell(r, 18).value
+                                    ws.cell(r, 19).value
                                 )
 
                     if cpt_structured:

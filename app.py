@@ -534,7 +534,7 @@ with tab2:
                 cpt_structured = {}
                 parsed_successfully = False
 
-                # -------------------------------------------------------------
+# -------------------------------------------------------------
                 # STRATEGY A : Visible Ambient Parser (FIXED)
                 # -------------------------------------------------------------
                 try:
@@ -565,6 +565,7 @@ with tab2:
                             return float(val)
                         except (ValueError, TypeError):
                             return 0.0
+
                     start_row = None
                     for r in range(1, ws.max_row + 1):
                         if ws.row_dimensions[r].hidden:
@@ -572,26 +573,14 @@ with tab2:
                         
                         raw_a = ws.cell(r, 1).value
                         raw_b = ws.cell(r, 2).value
-                        
-                        # SAFE STRING CONVERSION: Prevents TypeError (NoneType + str)
-                        a = str(raw_a).strip() if raw_a is not None else ""
-                        b = str(raw_b).strip() if raw_b is not None else ""
 
-                        # Now you can safely use 'a' and 'b' for string matching 
-                        # without fear of None values breaking the app.
-                    start_row = None
-                    for r in range(1, ws.max_row + 1):
-                        if ws.row_dimensions[r].hidden:
-                            continue
-                        a = ws.cell(r, 1).value
-                        b = ws.cell(r, 2).value
+                        # SAFE STRING CHECK: Converts inputs cleanly to avoid NoneType + Str crashes
+                        a_str = str(raw_a).strip().lower() if raw_a is not None else ""
+                        b_str = str(raw_b).strip().lower() if raw_b is not None else ""
 
                         if (
-                            isinstance(a, str)
-                            and isinstance(b, str)
-                            and a.strip().lower() == "th knob"
-                            and b.strip().lower() == "data criteria"
-                        ):
+                            "th. knob" in a_str or "th knob" in a_str
+                        ) and b_str == "data criteria":
                             start_row = r + 2
                             break
 
@@ -615,32 +604,32 @@ with tab2:
                         if current_flag is None:
                             continue
 
+                        # FIXED: Swapped 'to_float' with our defined 'safe_float' shield
                         if colB == "mean":
                             cpt_structured[current_flag] = {
-                                "mean": {  # FIXED: Wrapped in standard 'mean' block to match fallback behavior
-                                    "tf-1": to_float(ws.cell(r, 3).value),
-                                    "tf-2": to_float(ws.cell(r, 4).value),
-                                    "tf-3": to_float(ws.cell(r, 5).value),
-                                    "tf-4": to_float(ws.cell(r, 6).value),
-                                    "tf-5": to_float(ws.cell(r, 7).value),
-                                    "tc-1": to_float(ws.cell(r, 13).value),
-                                    "tc-2": to_float(ws.cell(r, 14).value),
-                                    "tc-3": to_float(ws.cell(r, 15).value),
-                                    "tvc": to_float(ws.cell(r, 17).value),
-                                    "S2": to_float(ws.cell(r, 21).value),
+                                "mean": {  
+                                    "tf-1": safe_float(ws.cell(r, 3).value),
+                                    "tf-2": safe_float(ws.cell(r, 4).value),
+                                    "tf-3": safe_float(ws.cell(r, 5).value),
+                                    "tf-4": safe_float(ws.cell(r, 6).value),
+                                    "tf-5": safe_float(ws.cell(r, 7).value),
+                                    "tc-1": safe_float(ws.cell(r, 13).value),
+                                    "tc-2": safe_float(ws.cell(r, 14).value),
+                                    "tc-3": safe_float(ws.cell(r, 15).value),
+                                    "tvc": safe_float(ws.cell(r, 17).value),
+                                    "S2": safe_float(ws.cell(r, 21).value),
                                     "Sensor": 0.0
                                 }
                             }
                         elif colB == "min":
                             if current_flag in cpt_structured and "mean" in cpt_structured[current_flag]:
-                                cpt_structured[current_flag]["mean"]["Sensor"] = to_float(ws.cell(r, 19).value)
+                                cpt_structured[current_flag]["mean"]["Sensor"] = safe_float(ws.cell(r, 19).value)
 
                     if cpt_structured:
                         parsed_successfully = True
                         st.success("✅ Strategy A successful.")
                 except Exception as e:
                     st.write(f"Strategy A failed: {e}")
-
                 # --- STRATEGY B: 2nd Sheet Multi-Row Header Format ---
                 if not parsed_successfully:
                     try:

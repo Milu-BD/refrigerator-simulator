@@ -896,7 +896,7 @@ with tab3:
                     current_ver = st.session_state[version_key]
 
                     # Section A: Display Pulldown Data Summary Table
-                    st.markdown("#### 🔹 Pulldown Baseline Layer Matrix")
+                    st.markdown("#### 🔹 Counted Pulldown Matrix")
 
                     p_df = pd.DataFrame([record["pulldown_data"]])
                     
@@ -933,7 +933,7 @@ with tab3:
                     )
                     
                     # Section B: Display CPT Multivariable Flags Data Matrix
-                    st.markdown("#### 🔹 Connected CPT Multi-Format Condition Flags")
+                    st.markdown("#### 🔹 Counted Positions for CPT Matrix")
                     
                     cpt_rows = []
                     for flag_name, sensor_values in record["cpt_data"].items():

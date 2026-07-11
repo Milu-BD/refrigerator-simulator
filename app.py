@@ -5,6 +5,7 @@ import pandas as pd
 from sklearn.neighbors import KNeighborsRegressor
 import streamlit as st
 import copy
+import streamlit as str
 
 # Must be the absolute first Streamlit command in the script
 st.set_page_config(page_title="Refrigerator Simulator Hub", layout="wide")
@@ -97,12 +98,10 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
                 all_flags.add(flag)
                 
         for flag in sorted(all_flags):
-
             X_train = []
             y_train = []
 
             for record in volume_records:
-
                 if flag not in record["cpt_data"]:
                     continue
 
@@ -112,40 +111,43 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
                 )
 
                 outputs = record["cpt_data"][flag]
-            y_vector = (
-                [outputs.get(f, 0.0) for f in tc_features]
-                + [
-                    outputs.get("S2", 0.0),
-                    outputs.get("Sensor", 0.0)
-                ]
-            )
+                
+                # FIXED: Kept inside the record loop to correctly pair every record's inputs/outputs
+                y_vector = (
+                    [outputs.get(f, 0.0) for f in tc_features]
+                    + [
+                        outputs.get("S2", 0.0),
+                        outputs.get("Sensor", 0.0)
+                    ]
+                )
 
-            X_train.append(p_base)
-            y_train.append(y_vector)
+                X_train.append(p_base)
+                y_train.append(y_vector)
 
-        if len(X_train) >= 1:
-                    knn = KNeighborsRegressor(n_neighbors=min(2, len(X_train)), weights='distance')
-                    knn.fit(X_train, y_train)
-                    
-                    query_vector = np.array(new_pulldown + [target_s]).reshape(1, -1)
-                    prediction = knn.predict(query_vector)[0]
-                    
-                    row = {
-                        "TestFlag": flag,
-                        "tf-1": round(prediction[0], 2),
-                        "tf-2": round(prediction[1], 2),
-                        "tf-3": round(prediction[2], 2),
-                        "tf-4": round(prediction[3], 2),
-                        "tf-5": round(prediction[4], 2),
-
-                        "tc-1": round(prediction[5], 2),
-                        "tc-2": round(prediction[6], 2),
-                        "tc-3": round(prediction[7], 2),
-
-                        "tvc": round(prediction[8], 2),
-                        "S2": round(prediction[9], 2),
-                        "Sensor": round(prediction[10], 2)
-                    }
+            # FIXED: Kept inside the flag loop so it runs for every single TestFlag
+            if len(X_train) >= 1:
+                knn = KNeighborsRegressor(n_neighbors=min(2, len(X_train)), weights='distance')
+                knn.fit(X_train, y_train)
+                
+                query_vector = np.array(new_pulldown + [target_s]).reshape(1, -1)
+                prediction = knn.predict(query_vector)[0]
+                
+                row = {
+                    "TestFlag": flag,
+                    "tf-1": round(prediction[0], 2),
+                    "tf-2": round(prediction[1], 2),
+                    "tf-3": round(prediction[2], 2),
+                    "tf-4": round(prediction[3], 2),
+                    "tf-5": round(prediction[4], 2),
+                    "tc-1": round(prediction[5], 2),
+                    "tc-2": round(prediction[6], 2),
+                    "tc-3": round(prediction[7], 2),
+                    "tvc": round(prediction[8], 2),
+                    "S2": round(prediction[9], 2),
+                    "Sensor": round(prediction[10], 2)
+                }
+                # FIXED: Appended rows to your results pool
+                predicted_modes.append(row)
                     
         if predicted_modes:
             results_map[f"Target Sensor Set {idx+1} ({target_s}°C)"] = pd.DataFrame(predicted_modes)
@@ -459,21 +461,18 @@ with tab1:
                         st.markdown(f"### 📊 Predictions for {key_title}")
                         st.dataframe(df_res, use_container_width=True, hide_index=True)
 
+
 # ================= INITIALIZE STATE ON STARTUP =================
-# Run this before your tab containers to ensure historical models pull cleanly
 if "db" not in st.session_state:
     st.session_state.db = load_memory_from_disk()
 
-# =================================================================
-# 1. INITIALIZE KEY COUNTERS FOR THE FILE UPLOADERS (Put this near your startup state logic)
-# =================================================================
 if "p_file_key" not in st.session_state:
     st.session_state.p_file_key = 0
 if "cpt_file_key" not in st.session_state:
     st.session_state.cpt_file_key = 0
 
-# ================= TAB 2: DATA REPOSITORY ROOM =================
 
+# ================= TAB 2: DATA REPOSITORY ROOM =================
 with tab2:
     st.subheader(f"Onboard Lab Reports for [{selected_volume}] ({selected_arrangement})")
     
@@ -488,14 +487,12 @@ with tab2:
     
     col_f1, col_f2 = st.columns(2)
     with col_f1:
-        # Dynamically controlled key using a counter inside session state
         repo_pulldown_file = st.file_uploader(
             f"Upload Pulldown Excel ({repo_p_ambient})", 
             type=["xlsx", "xls"], 
             key=f"r_p_file_{p_repo_key}_{c_repo_key}_v_{st.session_state.p_file_key}"
         )
     with col_f2:
-        # Dynamically controlled key using a counter inside session state
         repo_cpt_file = st.file_uploader(
             f"Upload Respected CPT Excel ({repo_c_ambient})", 
             type=["xlsx", "xls"], 
@@ -505,9 +502,7 @@ with tab2:
     if repo_pulldown_file and repo_cpt_file:
         if st.button("💾 Process and Train Simulator Memory Buffer", type="primary"):
             try:
-                # -------------------------------------------------------------
                 # 1. PARSE PULLDOWN DATA
-                # -------------------------------------------------------------
                 df_p_sum = pd.read_excel(repo_pulldown_file, sheet_name=0, header=None)
                 df_p_sum[0] = df_p_sum[0].astype(str).apply(normalize_sensor_name)
                 
@@ -535,40 +530,34 @@ with tab2:
                     
                 resolved_sensor = sheet_data.get('sensor', 0.0)
                 
-                # -------------------------------------------------------------
-                # 2. PARSE CPT DATA (5-WAY CASCADE MULTI-FORMAT FAILSAFE)
-                # -------------------------------------------------------------
+                # 2. PARSE CPT DATA
                 cpt_structured = {}
                 parsed_successfully = False
 
-                                # -------------------------------------------------------------
-                # STRATEGY A : Visible Ambient Parser
-                # -------------------------------------------------------------
-                try:
-                    import openpyxl
+# -------------------------------------------------------------
+# STRATEGY A : Visible Ambient Parser (FIXED)
+# -------------------------------------------------------------
+try:
+    import openpyxl
 
-                    wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+    wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+    
+    # Match sheet names cleanly
+    if "ANALYSIS REPORT" in wb.sheetnames:
+        sheet_name = "ANALYSIS REPORT"
+    elif "CPT CALCULATION REPORT" in wb.sheetnames:
+        sheet_name = "CPT CALCULATION REPORT"
+    else:
+        sheet_name = wb.sheetnames[0]
+        
+    # FIXED: Moved outside the conditions so ws and dict are ALWAYS initialized
+    ws = wb[sheet_name]
+    cpt_structured = {}
 
-                    if "ANALYSIS REPORT" in wb.sheetnames:
-                        ws = wb["ANALYSIS REPORT"]
-                    elif "CPT CALCULATION REPORT" in wb.sheetnames:
-                        ws = wb["CPT CALCULATION REPORT"]
-                    else:
-                        ws = wb[wb.sheetnames[0]]
-
-                    cpt_structured = {}
-                    cpt_structured = {}
-
-                    # -------------------------------------------------
-                    # Locate the visible table automatically
-                    # -------------------------------------------------
                     start_row = None
-
                     for r in range(1, ws.max_row + 1):
-
                         if ws.row_dimensions[r].hidden:
                             continue
-
                         a = ws.cell(r, 1).value
                         b = ws.cell(r, 2).value
 
@@ -585,9 +574,7 @@ with tab2:
                         raise Exception("Visible CPT table not found.")
 
                     current_flag = None
-
                     for r in range(start_row, ws.max_row + 1):
-
                         if ws.row_dimensions[r].hidden:
                             continue
 
@@ -604,38 +591,28 @@ with tab2:
                             continue
 
                         if colB == "mean":
-
                             cpt_structured[current_flag] = {
-
-                                "tf-1": to_float(ws.cell(r, 3).value),
-                                "tf-2": to_float(ws.cell(r, 4).value),
-                                "tf-3": to_float(ws.cell(r, 5).value),
-                                "tf-4": to_float(ws.cell(r, 6).value),
-                                "tf-5": to_float(ws.cell(r, 7).value),
-
-                                "tc-1": to_float(ws.cell(r, 13).value),
-                                "tc-2": to_float(ws.cell(r, 14).value),
-                                "tc-3": to_float(ws.cell(r, 15).value),
-
-                                "tvc": to_float(ws.cell(r, 17).value),
-
-                                "S2": to_float(ws.cell(r, 21).value),
-
-                                "Sensor": 0.0
+                                "mean": {  # FIXED: Wrapped in standard 'mean' block to match fallback behavior
+                                    "tf-1": to_float(ws.cell(r, 3).value),
+                                    "tf-2": to_float(ws.cell(r, 4).value),
+                                    "tf-3": to_float(ws.cell(r, 5).value),
+                                    "tf-4": to_float(ws.cell(r, 6).value),
+                                    "tf-5": to_float(ws.cell(r, 7).value),
+                                    "tc-1": to_float(ws.cell(r, 13).value),
+                                    "tc-2": to_float(ws.cell(r, 14).value),
+                                    "tc-3": to_float(ws.cell(r, 15).value),
+                                    "tvc": to_float(ws.cell(r, 17).value),
+                                    "S2": to_float(ws.cell(r, 21).value),
+                                    "Sensor": 0.0
+                                }
                             }
-
                         elif colB == "min":
-
-                            if current_flag in cpt_structured:
-
-                                cpt_structured[current_flag]["Sensor"] = to_float(
-                                    ws.cell(r, 19).value
-                                )
+                            if current_flag in cpt_structured and "mean" in cpt_structured[current_flag]:
+                                cpt_structured[current_flag]["mean"]["Sensor"] = to_float(ws.cell(r, 19).value)
 
                     if cpt_structured:
                         parsed_successfully = True
                         st.success("✅ Strategy A successful.")
-
                 except Exception as e:
                     st.write(f"Strategy A failed: {e}")
 
@@ -673,7 +650,7 @@ with tab2:
                                 if rt_val == 100: continue
                                     
                                 if val_crit in ["mean", "avg", "average"]:
-                                    cpt_structured[current_flag][val_crit] = {
+                                    cpt_structured[current_flag]["mean"] = {  # FIXED: standardized key destination to "mean"
                                         "tf-1": float(row.get("tf1", 0.0)), "tf-2": float(row.get("tf2", 0.0)),
                                         "tf-3": float(row.get("tf3", 0.0)), "tf-4": float(row.get("tf4", 0.0)),
                                         "tf-5": float(row.get("tf5", 0.0)), "tc-1": float(row.get("tc1", 0.0)),
@@ -808,18 +785,14 @@ with tab2:
                         if cpt_structured: parsed_successfully = True
                     except Exception: pass
 
-                # -------------------------------------------------------------
                 # 3. SAVE DATA MATRIX AND FORCE RETENTION TO HARD DISK
-                # -------------------------------------------------------------
                 if not parsed_successfully or not cpt_structured:
                     raise ValueError("CPT processing pipeline failed. Spreadsheet structural pattern unknown.")
 
                 new_block = {
                     "pulldown_baseline_sensor": resolved_sensor,
-                    # Permanent copy of uploaded data
                     "original_pulldown_data": copy.deepcopy(p_extracted),
                     "original_cpt_data": copy.deepcopy(cpt_structured),
-                    # Editable copy
                     "pulldown_data": copy.deepcopy(p_extracted),
                     "cpt_data": copy.deepcopy(cpt_structured)
                 }
@@ -830,9 +803,7 @@ with tab2:
                 
                 save_memory_to_disk(st.session_state.db)
                 
-                # -------------------------------------------------------------
                 # 4. RESET FILE UPLOADERS BY INCREMENTING WIDGET KEYS
-                # -------------------------------------------------------------
                 st.session_state.p_file_key += 1
                 st.session_state.cpt_file_key += 1
                 
@@ -896,7 +867,7 @@ with tab3:
         verify_db_structure(selected_volume, selected_arrangement, p_inspect_key, c_inspect_key)
         records = st.session_state.db[selected_volume][selected_arrangement][p_inspect_key][c_inspect_key]
         
-       # 7. Render Active Memory Pool Records Table
+        # 7. Render Active Memory Pool Records Table
         if not records:
             st.info("No paired records matched for this specific arrangement selection.")
         else:
@@ -946,15 +917,14 @@ with tab3:
                         "📋 Copy Updated Pulldown Matrix",
                         value=edited_p_df.to_csv(sep="\t", index=False),
                         height=180,
+                        key=f"pulldown_copy_{run_idx}"
                     )
                     
                     # Section B: Display CPT Multivariable Flags Data Matrix
                     st.markdown("#### 🔹 Connected CPT Multi-Format Condition Flags")
                     
                     cpt_rows = []
-
                     for flag_name, sensor_values in record["cpt_data"].items():
-
                         row_entry = {
                             "Test Flag": flag_name,
                             "tf-1": sensor_values.get("tf-1", 0.0),
@@ -962,21 +932,19 @@ with tab3:
                             "tf-3": sensor_values.get("tf-3", 0.0),
                             "tf-4": sensor_values.get("tf-4", 0.0),
                             "tf-5": sensor_values.get("tf-5", 0.0),
-
                             "tc-1": sensor_values.get("tc-1", 0.0),
                             "tc-2": sensor_values.get("tc-2", 0.0),
                             "tc-3": sensor_values.get("tc-3", 0.0),
-
                             "tvc": sensor_values.get("tvc", 0.0),
                             "S2": sensor_values.get("S2", 0.0),
                             "Sensor": sensor_values.get("Sensor", 0.0)
                         }
-
                         cpt_rows.append(row_entry)
 
                     if cpt_rows:
                         cpt_df = pd.DataFrame(cpt_rows)
                         original_cpt_rows = []
+                        
                         for flag_name, sensor_values in record.get(
                             "original_cpt_data",
                             record["cpt_data"]
@@ -995,92 +963,75 @@ with tab3:
                                 "S2": sensor_values.get("S2", 0.0),
                                 "Sensor": sensor_values.get("Sensor", 0.0)
                             })
-                            original_cpt_df = pd.DataFrame(original_cpt_rows)
-                            edited_cpt_df = st.data_editor(
-                                cpt_df,
-                                use_container_width=True,
-                                hide_index=True,
-                                num_rows="fixed",
-                                key=f"cpt_editor_{run_idx}"
-                                )
-                            st.markdown("##### 📄 Original Uploaded CPT Matrix")
-                            st.dataframe(
-                                original_cpt_df,
-                                use_container_width=True,
-                                hide_index=True
-                            )
-                            st.text_area(
-                                "📋 Copy Updated CPT Matrix",
-                                value=edited_cpt_df.to_csv(sep="\t", index=False),
-                                height=220
-                            )
+                            
+                        # --- FIXED INDENTATION START ---
+                        # These blocks must execute AFTER the loop completes, aligned with 'if cpt_rows:'
+                        original_cpt_df = pd.DataFrame(original_cpt_rows)
+                        edited_cpt_df = st.data_editor(
+                            cpt_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            num_rows="fixed",
+                            key=f"cpt_editor_{run_idx}"
+                        )
+                        
+                        st.markdown("##### 📄 Original Uploaded CPT Matrix")
+                        st.dataframe(
+                            original_cpt_df,
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                        
+                        st.text_area(
+                            "📋 Copy Updated CPT Matrix",
+                            value=edited_cpt_df.to_csv(sep="\t", index=False),
+                            height=220,
+                            key=f"cpt_copy_{run_idx}"
+                        )
 
-                        # -------------------------------------------------
-                        # Detect whether reviewer changed any value
-                        # -------------------------------------------------
-
+                        # Detect changes
                         pulldown_changed = not edited_p_df.equals(p_df)
                         cpt_changed = not edited_cpt_df.equals(cpt_df)
-
                         dataset_changed = pulldown_changed or cpt_changed
 
                         if dataset_changed:
-
                             st.success("🟡 Unsaved changes detected.")
-
                             save_clicked = st.button(
                                 "💾 Save Edited Dataset",
                                 key=f"save_dataset_{run_idx}",
                                 type="primary"
                             )
-
                         else:
-
                             st.info("No changes made.")
-
                             save_clicked = False
 
                         if save_clicked:
-
-                            # -----------------------------
                             # Save Pulldown Matrix
-                            # -----------------------------
                             record["pulldown_data"] = edited_p_df.iloc[0].to_dict()
 
-                            # -----------------------------
                             # Save CPT Matrix
-                            # -----------------------------
                             new_cpt = {}
-
                             for _, row in edited_cpt_df.iterrows():
-
                                 flag = row["Test Flag"]
-
                                 new_cpt[flag] = {
-
                                     "tf-1": float(row["tf-1"]),
                                     "tf-2": float(row["tf-2"]),
                                     "tf-3": float(row["tf-3"]),
                                     "tf-4": float(row["tf-4"]),
                                     "tf-5": float(row["tf-5"]),
-
                                     "tc-1": float(row["tc-1"]),
                                     "tc-2": float(row["tc-2"]),
                                     "tc-3": float(row["tc-3"]),
-
                                     "tvc": float(row["tvc"]),
                                     "S2": float(row["S2"]),
                                     "Sensor": float(row["Sensor"])
-
                                 }
-
                             record["cpt_data"] = new_cpt
 
                             save_memory_to_disk(st.session_state.db)
-
                             st.success("✅ Dataset updated successfully.")
-
                             st.rerun()
+                        # --- FIXED INDENTATION END ---
                     else:
                         st.warning(
                             "No CPT entries found inside this specific record block."

@@ -607,24 +607,24 @@ with tab2:
                             continue
 
                         if colB == "mean":
+                            # FIX: Flatten the dictionary structure by removing the nested "mean" key
                             cpt_structured[current_flag] = {
-                                "mean": {  # FIXED: Wrapped in standard 'mean' block to match fallback behavior
-                                    "tf-1": to_float(ws.cell(r, 3).value),
-                                    "tf-2": to_float(ws.cell(r, 4).value),
-                                    "tf-3": to_float(ws.cell(r, 5).value),
-                                    "tf-4": to_float(ws.cell(r, 6).value),
-                                    "tf-5": to_float(ws.cell(r, 7).value),
-                                    "tc-1": to_float(ws.cell(r, 13).value),
-                                    "tc-2": to_float(ws.cell(r, 14).value),
-                                    "tc-3": to_float(ws.cell(r, 15).value),
-                                    "tvc": to_float(ws.cell(r, 17).value),
-                                    "S2": to_float(ws.cell(r, 21).value),
-                                    "Sensor": 0.0
-                                }
+                                "tf-1": to_float(ws.cell(r, 3).value),
+                                "tf-2": to_float(ws.cell(r, 4).value),
+                                "tf-3": to_float(ws.cell(r, 5).value),
+                                "tf-4": to_float(ws.cell(r, 6).value),
+                                "tf-5": to_float(ws.cell(r, 7).value),
+                                "tc-1": to_float(ws.cell(r, 13).value),
+                                "tc-2": to_float(ws.cell(r, 14).value),
+                                "tc-3": to_float(ws.cell(r, 15).value),
+                                "tvc": to_float(ws.cell(r, 17).value),
+                                "S2": to_float(ws.cell(r, 21).value),
+                                "Sensor": 0.0
                             }
                         elif colB == "min":
-                            if current_flag in cpt_structured and "mean" in cpt_structured[current_flag]:
-                                cpt_structured[current_flag]["mean"]["Sensor"] = to_float(ws.cell(r, 19).value)
+                            # FIX: Reference the flat dictionary layout directly
+                            if current_flag in cpt_structured:
+                                cpt_structured[current_flag]["Sensor"] = to_float(ws.cell(r, 19).value)
 
                     if cpt_structured:
                         parsed_successfully = True

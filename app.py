@@ -156,16 +156,6 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
 # =================================================================
 # 5. STREAMLIT USER INTERFACE (TABS) & REPOSITORY LOGIC
 # =================================================================
-
-# Create your layout tabs first
-tab1, tab2, tab3 = st.tabs(["Simulation Hub", "Data Repository Room", "Analytics"])
-
-with tab2:
-    st.header("Data Repository Room")
-    
-    # Initialize target structure dictionary and tracking status cleanly first
-    cpt_structured = {}
-    parsed_successfully = False
     
     # --- STEP 1: RENDER THE FILE UPLOADER FIRST ---
     repo_cpt_file = st.file_uploader(

@@ -892,13 +892,14 @@ with tab3:
                     st.markdown("#### 🔹 Pulldown Baseline Layer Matrix")
 
                     p_df = pd.DataFrame([record["pulldown_data"]])
-                    original_p_df = pd.DataFrame([
-                        record.get(
-                            "original_pulldown_data",
-                            record["pulldown_data"]
-                        )
-                    ])
+                    
+                    # Safe fallback: if original backup doesn't exist yet, freeze the initial state
+                    if "original_pulldown_data" not in record:
+                        record["original_pulldown_data"] = record["pulldown_data"].copy()
 
+                    original_p_df = pd.DataFrame([record["original_pulldown_data"]])
+
+                    # Live data editor driving the updates
                     edited_p_df = st.data_editor(
                         p_df,
                         use_container_width=True,
@@ -906,13 +907,15 @@ with tab3:
                         num_rows="fixed",
                         key=f"pulldown_editor_{run_idx}"
                     )
+                    
                     st.markdown("##### 📄 Original Uploaded Pulldown Matrix")
                     st.dataframe(
-                        original_p_df,
+                        original_p_df,  # This stays completely locked
                         use_container_width=True,
                         hide_index=True
                     )
 
+                    # Dynamic Text Box: Updates instantly reflecting edited_p_df
                     st.text_area(
                         "📋 Copy Updated Pulldown Matrix",
                         value=edited_p_df.to_csv(sep="\t", index=False),
@@ -943,12 +946,13 @@ with tab3:
 
                     if cpt_rows:
                         cpt_df = pd.DataFrame(cpt_rows)
-                        original_cpt_rows = []
                         
-                        for flag_name, sensor_values in record.get(
-                            "original_cpt_data",
-                            record["cpt_data"]
-                        ).items():
+                        # Safe fallback: freeze initial CPT data state if backup doesn't exist
+                        if "original_cpt_data" not in record:
+                            record["original_cpt_data"] = record["cpt_data"].copy()
+
+                        original_cpt_rows = []
+                        for flag_name, sensor_values in record["original_cpt_data"].items():
                             original_cpt_rows.append({
                                 "Test Flag": flag_name,
                                 "tf-1": sensor_values.get("tf-1", 0.0),
@@ -964,9 +968,9 @@ with tab3:
                                 "Sensor": sensor_values.get("Sensor", 0.0)
                             })
                             
-                        # --- FIXED INDENTATION START ---
-                        # These blocks must execute AFTER the loop completes, aligned with 'if cpt_rows:'
                         original_cpt_df = pd.DataFrame(original_cpt_rows)
+                        
+                        # Live editor for tracking changes
                         edited_cpt_df = st.data_editor(
                             cpt_df,
                             use_container_width=True,
@@ -977,11 +981,12 @@ with tab3:
                         
                         st.markdown("##### 📄 Original Uploaded CPT Matrix")
                         st.dataframe(
-                            original_cpt_df,
+                            original_cpt_df,  # This stays completely locked
                             use_container_width=True,
                             hide_index=True
                         )
                         
+                        # Dynamic Text Box: Updates instantly reflecting edited_cpt_df
                         st.text_area(
                             "📋 Copy Updated CPT Matrix",
                             value=edited_cpt_df.to_csv(sep="\t", index=False),

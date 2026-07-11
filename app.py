@@ -534,30 +534,25 @@ with tab2:
                 cpt_structured = {}
                 parsed_successfully = False
 
-# -------------------------------------------------------------
-# STRATEGY A : Visible Ambient Parser (FIXED)
-# -------------------------------------------------------------
-try:
-    import openpyxl
+                # -------------------------------------------------------------
+                # STRATEGY A : Visible Ambient Parser (FIXED)
+                # -------------------------------------------------------------
+                try:
+                    import openpyxl
 
-    wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
-    
-    # Match sheet names cleanly
-    if "ANALYSIS REPORT" in wb.sheetnames:
-        sheet_name = "ANALYSIS REPORT"
-    elif "CPT CALCULATION REPORT" in wb.sheetnames:
-        sheet_name = "CPT CALCULATION REPORT"
-    else:
-        sheet_name = wb.sheetnames[0]
-        
-    # FIXED: Moved outside the conditions so ws and dict are ALWAYS initialized
-    ws = wb[sheet_name]
-    cpt_structured = {}
-
-except Exception as e:
-    # Safely catches missing files, bad paths, or corrupted workbook errors
-    st.error(f"Failed to process the Excel workbook: {str(e)}")
-    cpt_structured = {}
+                    wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+                    
+                    # Match sheet names cleanly
+                    if "ANALYSIS REPORT" in wb.sheetnames:
+                        sheet_name = "ANALYSIS REPORT"
+                    elif "CPT CALCULATION REPORT" in wb.sheetnames:
+                        sheet_name = "CPT CALCULATION REPORT"
+                    else:
+                        sheet_name = wb.sheetnames[0]
+                        
+                    # FIXED: Moved outside the conditions so ws and dict are ALWAYS initialized
+                    ws = wb[sheet_name]
+                    cpt_structured = {}
 
                     start_row = None
                     for r in range(1, ws.max_row + 1):

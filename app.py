@@ -159,25 +159,26 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
 # 5. STREAMLIT USER INTERFACE (TABS) & REPOSITORY LOGIC
 # =================================================================
     
-# --- STEP 1: RENDER THE FILE UPLOADER FIRST ---
-repo_cpt_file = st.file_uploader(
+    # --- STEP 1: RENDER THE FILE UPLOADER FIRST ---
+    repo_cpt_file = st.file_uploader(
     "Upload CPT Calculation Report (Excel)",
     type=["xlsx", "xls"],
     key="repo_cpt_file"
     )
+    
+    # --- STEP 2: RUN STRATEGY A *ONLY* IF A FILE IS PRESENT ---
+    if repo_cpt_file is not None:
+        try:
+            import openpyxl
 
-# --- STEP 2: RUN STRATEGY A *ONLY* IF A FILE IS PRESENT ---
-if repo_cpt_file is not None:
-    try:
-        import openpyxl
-        # 1. Open the file natively using openpyxl to check row visibility states
-        wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+            # 1. Open the file natively using openpyxl to check row visibility states
+            wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
             
             # Target the layout sheet safely
-        if "ANALYSIS REPORT" in wb.sheetnames:
-            sheet_name = "ANALYSIS REPORT"
-        elif "CPT CALCULATION REPORT" in wb.sheetnames:
-            sheet_name = "CPT CALCULATION REPORT"
+            if "ANALYSIS REPORT" in wb.sheetnames:
+                sheet_name = "ANALYSIS REPORT"
+            elif "CPT CALCULATION REPORT" in wb.sheetnames:
+                sheet_name = "CPT CALCULATION REPORT"
             else:
                 sheet_name = wb.sheetnames[0]
                 ws = wb[sheet_name]
@@ -529,7 +530,7 @@ with tab2:
                     
                 resolved_sensor = sheet_data.get('sensor', 0.0)
                 
-# 2. PARSE CPT DATA
+                # 2. PARSE CPT DATA
                 cpt_structured = {}
                 parsed_successfully = False
 
@@ -538,7 +539,6 @@ with tab2:
                 # -------------------------------------------------------------
                 try:
                     import openpyxl
-                    from openpyxl.utils import get_column_letter
 
                     wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
                     
@@ -550,47 +550,23 @@ with tab2:
                     else:
                         sheet_name = wb.sheetnames[0]
                         
+                    # FIXED: Moved outside the conditions so ws and dict are ALWAYS initialized
                     ws = wb[sheet_name]
                     cpt_structured = {}
 
-                    # SAFE CONVERTER SHIELD (Prevents TypeError on unexpected blanks or string text)
-                    def safe_float(val):
-                        if val is None:
-                            return 0.0
-                        try:
-                            if isinstance(val, str):
-                                val = val.replace("°C", "").replace("̊C", "").strip()
-                            return float(val)
-                        except (ValueError, TypeError):
-                            return 0.0
-
-                    # CELL VISIBILITY SHIELD: Ignores cell if its specific row or column is hidden
-                    def get_visible_value(row_idx, col_idx):
-                        # 1. Check if the row is hidden
-                        if ws.row_dimensions[row_idx].hidden:
-                            return None
-                        # 2. Check if the column is hidden
-                        col_letter = get_column_letter(col_idx)
-                        if ws.column_dimensions[col_letter].hidden:
-                            return None
-                        # 3. Return value only if fully visible
-                        return ws.cell(row_idx, col_idx).value
-
                     start_row = None
                     for r in range(1, ws.max_row + 1):
-                        # Strict Row Skip
                         if ws.row_dimensions[r].hidden:
                             continue
-                        
-                        raw_a = get_visible_value(r, 1)
-                        raw_b = get_visible_value(r, 2)
-
-                        a_str = str(raw_a).strip().lower() if raw_a is not None else ""
-                        b_str = str(raw_b).strip().lower() if raw_b is not None else ""
+                        a = ws.cell(r, 1).value
+                        b = ws.cell(r, 2).value
 
                         if (
-                            "th. knob" in a_str or "th knob" in a_str
-                        ) and b_str == "data criteria":
+                            isinstance(a, str)
+                            and isinstance(b, str)
+                            and a.strip().lower() == "th knob"
+                            and b.strip().lower() == "data criteria"
+                        ):
                             start_row = r + 2
                             break
 
@@ -599,12 +575,11 @@ with tab2:
 
                     current_flag = None
                     for r in range(start_row, ws.max_row + 1):
-                        # Strict Row Skip
                         if ws.row_dimensions[r].hidden:
                             continue
 
-                        colA = get_visible_value(r, 1)
-                        colB = get_visible_value(r, 2)
+                        colA = ws.cell(r, 1).value
+                        colB = ws.cell(r, 2).value
 
                         colA = "" if colA is None else str(colA).strip()
                         colB = "" if colB is None else str(colB).strip().lower()
@@ -615,32 +590,32 @@ with tab2:
                         if current_flag is None:
                             continue
 
-                        # Read only from verified visible columns
                         if colB == "mean":
                             cpt_structured[current_flag] = {
-                                "mean": {  
-                                    "tf-1": safe_float(get_visible_value(r, 3)),
-                                    "tf-2": safe_float(get_visible_value(r, 4)),
-                                    "tf-3": safe_float(get_visible_value(r, 5)),
-                                    "tf-4": safe_float(get_visible_value(r, 6)),
-                                    "tf-5": safe_float(get_visible_value(r, 7)),
-                                    "tc-1": safe_float(get_visible_value(r, 13)),
-                                    "tc-2": safe_float(get_visible_value(r, 14)),
-                                    "tc-3": safe_float(get_visible_value(r, 15)),
-                                    "tvc": safe_float(get_visible_value(r, 17)),
-                                    "S2": safe_float(get_visible_value(r, 21)),
+                                "mean": {  # FIXED: Wrapped in standard 'mean' block to match fallback behavior
+                                    "tf-1": to_float(ws.cell(r, 3).value),
+                                    "tf-2": to_float(ws.cell(r, 4).value),
+                                    "tf-3": to_float(ws.cell(r, 5).value),
+                                    "tf-4": to_float(ws.cell(r, 6).value),
+                                    "tf-5": to_float(ws.cell(r, 7).value),
+                                    "tc-1": to_float(ws.cell(r, 13).value),
+                                    "tc-2": to_float(ws.cell(r, 14).value),
+                                    "tc-3": to_float(ws.cell(r, 15).value),
+                                    "tvc": to_float(ws.cell(r, 17).value),
+                                    "S2": to_float(ws.cell(r, 21).value),
                                     "Sensor": 0.0
                                 }
                             }
                         elif colB == "min":
                             if current_flag in cpt_structured and "mean" in cpt_structured[current_flag]:
-                                cpt_structured[current_flag]["mean"]["Sensor"] = safe_float(get_visible_value(r, 19))
+                                cpt_structured[current_flag]["mean"]["Sensor"] = to_float(ws.cell(r, 19).value)
 
                     if cpt_structured:
                         parsed_successfully = True
                         st.success("✅ Strategy A successful.")
                 except Exception as e:
                     st.write(f"Strategy A failed: {e}")
+
                 # --- STRATEGY B: 2nd Sheet Multi-Row Header Format ---
                 if not parsed_successfully:
                     try:
@@ -834,9 +809,8 @@ with tab2:
                 
                 st.success(f"🚀 Model Simulator Trained successfully! Hard-Backup saved to storage file context.")
                 st.rerun()
-            except Exception:
-                import traceback
-                st.code(traceback.format_exc())
+            except Exception as e:
+                st.error(f"Compilation error parsing dataset rows: {str(e)}")
 
 # ================= TAB 3: REVIEWER DASHBOARD =================
 with tab3:

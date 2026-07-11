@@ -554,6 +554,11 @@ try:
     ws = wb[sheet_name]
     cpt_structured = {}
 
+except Exception as e:
+    # Safely catches missing files, bad paths, or corrupted workbook errors
+    st.error(f"Failed to process the Excel workbook: {str(e)}")
+    cpt_structured = {}
+
                     start_row = None
                     for r in range(1, ws.max_row + 1):
                         if ws.row_dimensions[r].hidden:

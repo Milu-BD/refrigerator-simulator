@@ -176,8 +176,8 @@ if repo_cpt_file is not None:
             # Target the layout sheet safely
         if "ANALYSIS REPORT" in wb.sheetnames:
             sheet_name = "ANALYSIS REPORT"
-            elif "CPT CALCULATION REPORT" in wb.sheetnames:
-                sheet_name = "CPT CALCULATION REPORT"
+        elif "CPT CALCULATION REPORT" in wb.sheetnames:
+            sheet_name = "CPT CALCULATION REPORT"
             else:
                 sheet_name = wb.sheetnames[0]
                 ws = wb[sheet_name]

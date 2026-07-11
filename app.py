@@ -534,11 +534,12 @@ with tab2:
                 cpt_structured = {}
                 parsed_successfully = False
 
-# -------------------------------------------------------------
+                # -------------------------------------------------------------
                 # STRATEGY A : Visible Ambient Parser (FIXED)
                 # -------------------------------------------------------------
                 try:
                     import openpyxl
+                    from openpyxl.utils import get_column_letter
 
                     wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
                     
@@ -550,7 +551,6 @@ with tab2:
                     else:
                         sheet_name = wb.sheetnames[0]
                         
-                    # FIXED: Moved outside the conditions so ws and dict are ALWAYS initialized
                     ws = wb[sheet_name]
                     cpt_structured = {}
 
@@ -560,21 +560,32 @@ with tab2:
                             return 0.0
                         try:
                             if isinstance(val, str):
-                                # Strips out both standard '°C' and special characters '̊C' from strings
                                 val = val.replace("°C", "").replace("̊C", "").strip()
                             return float(val)
                         except (ValueError, TypeError):
                             return 0.0
 
+                    # CELL VISIBILITY SHIELD: Ignores cell if its specific row or column is hidden
+                    def get_visible_value(row_idx, col_idx):
+                        # 1. Check if the row is hidden
+                        if ws.row_dimensions[row_idx].hidden:
+                            return None
+                        # 2. Check if the column is hidden
+                        col_letter = get_column_letter(col_idx)
+                        if ws.column_dimensions[col_letter].hidden:
+                            return None
+                        # 3. Return value only if fully visible
+                        return ws.cell(row_idx, col_idx).value
+
                     start_row = None
                     for r in range(1, ws.max_row + 1):
+                        # Strict Row Skip
                         if ws.row_dimensions[r].hidden:
                             continue
                         
-                        raw_a = ws.cell(r, 1).value
-                        raw_b = ws.cell(r, 2).value
+                        raw_a = get_visible_value(r, 1)
+                        raw_b = get_visible_value(r, 2)
 
-                        # SAFE STRING CHECK: Converts inputs cleanly to avoid NoneType + Str crashes
                         a_str = str(raw_a).strip().lower() if raw_a is not None else ""
                         b_str = str(raw_b).strip().lower() if raw_b is not None else ""
 
@@ -589,11 +600,12 @@ with tab2:
 
                     current_flag = None
                     for r in range(start_row, ws.max_row + 1):
+                        # Strict Row Skip
                         if ws.row_dimensions[r].hidden:
                             continue
 
-                        colA = ws.cell(r, 1).value
-                        colB = ws.cell(r, 2).value
+                        colA = get_visible_value(r, 1)
+                        colB = get_visible_value(r, 2)
 
                         colA = "" if colA is None else str(colA).strip()
                         colB = "" if colB is None else str(colB).strip().lower()
@@ -604,26 +616,26 @@ with tab2:
                         if current_flag is None:
                             continue
 
-                        # FIXED: Swapped 'to_float' with our defined 'safe_float' shield
+                        # Read only from verified visible columns
                         if colB == "mean":
                             cpt_structured[current_flag] = {
                                 "mean": {  
-                                    "tf-1": safe_float(ws.cell(r, 3).value),
-                                    "tf-2": safe_float(ws.cell(r, 4).value),
-                                    "tf-3": safe_float(ws.cell(r, 5).value),
-                                    "tf-4": safe_float(ws.cell(r, 6).value),
-                                    "tf-5": safe_float(ws.cell(r, 7).value),
-                                    "tc-1": safe_float(ws.cell(r, 13).value),
-                                    "tc-2": safe_float(ws.cell(r, 14).value),
-                                    "tc-3": safe_float(ws.cell(r, 15).value),
-                                    "tvc": safe_float(ws.cell(r, 17).value),
-                                    "S2": safe_float(ws.cell(r, 21).value),
+                                    "tf-1": safe_float(get_visible_value(r, 3)),
+                                    "tf-2": safe_float(get_visible_value(r, 4)),
+                                    "tf-3": safe_float(get_visible_value(r, 5)),
+                                    "tf-4": safe_float(get_visible_value(r, 6)),
+                                    "tf-5": safe_float(get_visible_value(r, 7)),
+                                    "tc-1": safe_float(get_visible_value(r, 13)),
+                                    "tc-2": safe_float(get_visible_value(r, 14)),
+                                    "tc-3": safe_float(get_visible_value(r, 15)),
+                                    "tvc": safe_float(get_visible_value(r, 17)),
+                                    "S2": safe_float(get_visible_value(r, 21)),
                                     "Sensor": 0.0
                                 }
                             }
                         elif colB == "min":
                             if current_flag in cpt_structured and "mean" in cpt_structured[current_flag]:
-                                cpt_structured[current_flag]["mean"]["Sensor"] = safe_float(ws.cell(r, 19).value)
+                                cpt_structured[current_flag]["mean"]["Sensor"] = safe_float(get_visible_value(r, 19))
 
                     if cpt_structured:
                         parsed_successfully = True

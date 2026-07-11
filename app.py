@@ -517,14 +517,14 @@ with tab2:
                 parsed_successfully = False
 
                 # -------------------------------------------------------------
-                # STRATEGY A : Visible Ambient Parser (FIXED VARIABLES)
+                # STRATEGY A : Visible Ambient Parser (FIXED)
                 # -------------------------------------------------------------
                 try:
                     import openpyxl
-                    from openpyxl.utils import get_column_letter
 
                     wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
                     
+                    # Match sheet names cleanly
                     if "ANALYSIS REPORT" in wb.sheetnames:
                         sheet_name = "ANALYSIS REPORT"
                     elif "CPT CALCULATION REPORT" in wb.sheetnames:
@@ -532,54 +532,36 @@ with tab2:
                     else:
                         sheet_name = wb.sheetnames[0]
                         
+                    # FIXED: Moved outside the conditions so ws and dict are ALWAYS initialized
                     ws = wb[sheet_name]
                     cpt_structured = {}
 
-                    # Safe numeric extraction
-                    def safe_float(val):
-                        if val is None:
-                            return 0.0
-                        try:
-                            if isinstance(val, str):
-                                val = val.replace("°C", "").replace("̊C", "").strip()
-                            return float(val)
-                        except (ValueError, TypeError):
-                            return 0.0
-
-                    # Unhidden cell detection validation
-                    def get_visible_value(row_idx, col_idx):
-                        if ws.row_dimensions[row_idx].hidden:
-                            return None
-                        col_letter = get_column_letter(col_idx)
-                        if ws.column_dimensions[col_letter].hidden:
-                            return None
-                        return ws.cell(row_idx, col_idx).value
-
                     start_row = None
-                    for check_row in range(1, ws.max_row + 1):
-                        if ws.row_dimensions[check_row].hidden:
+                    for r in range(1, ws.max_row + 1):
+                        if ws.row_dimensions[r].hidden:
                             continue
-                        
-                        raw_a = get_visible_value(check_row, 1)
-                        raw_b = get_visible_value(check_row, 2)
+                        a = ws.cell(r, 1).value
+                        b = ws.cell(r, 2).value
 
-                        a_str = str(raw_a).strip().lower() if raw_a is not None else ""
-                        b_str = str(raw_b).strip().lower() if raw_b is not None else ""
-
-                        if ("th. knob" in a_str or "th knob" in a_str) and "data criteria" in b_str:
-                            start_row = check_row + 2
+                        if (
+                            isinstance(a, str)
+                            and isinstance(b, str)
+                            and a.strip().lower() == "th knob"
+                            and b.strip().lower() == "data criteria"
+                        ):
+                            start_row = r + 2
                             break
 
                     if start_row is None:
-                        raise Exception("Visible CPT table header coordinates not found.")
+                        raise Exception("Visible CPT table not found.")
 
                     current_flag = None
-                    for data_row in range(start_row, ws.max_row + 1):
-                        if ws.row_dimensions[data_row].hidden:
+                    for r in range(start_row, ws.max_row + 1):
+                        if ws.row_dimensions[r].hidden:
                             continue
 
-                        colA = get_visible_value(data_row, 1)
-                        colB = get_visible_value(data_row, 2)
+                        colA = ws.cell(r, 1).value
+                        colB = ws.cell(r, 2).value
 
                         colA = "" if colA is None else str(colA).strip()
                         colB = "" if colB is None else str(colB).strip().lower()
@@ -590,24 +572,25 @@ with tab2:
                         if current_flag is None:
                             continue
 
-                        # Read strictly from mapped unhidden cells
                         if colB == "mean":
+                            # FIX: Flatten the dictionary structure by removing the nested "mean" key
                             cpt_structured[current_flag] = {
-                                "tf-1": safe_float(get_visible_value(data_row, 3)),
-                                "tf-2": safe_float(get_visible_value(data_row, 4)),
-                                "tf-3": safe_float(get_visible_value(data_row, 5)),
-                                "tf-4": safe_float(get_visible_value(data_row, 6)),
-                                "tf-5": safe_float(get_visible_value(data_row, 7)),
-                                "tc-1": safe_float(get_visible_value(data_row, 13)),
-                                "tc-2": safe_float(get_visible_value(data_row, 14)),
-                                "tc-3": safe_float(get_visible_value(data_row, 15)),
-                                "tvc": safe_float(get_visible_value(data_row, 17)),
-                                "S2": safe_float(get_visible_value(data_row, 21)),
+                                "tf-1": to_float(ws.cell(r, 3).value),
+                                "tf-2": to_float(ws.cell(r, 4).value),
+                                "tf-3": to_float(ws.cell(r, 5).value),
+                                "tf-4": to_float(ws.cell(r, 6).value),
+                                "tf-5": to_float(ws.cell(r, 7).value),
+                                "tc-1": to_float(ws.cell(r, 13).value),
+                                "tc-2": to_float(ws.cell(r, 14).value),
+                                "tc-3": to_float(ws.cell(r, 15).value),
+                                "tvc": to_float(ws.cell(r, 17).value),
+                                "S2": to_float(ws.cell(r, 21).value),
                                 "Sensor": 0.0
                             }
                         elif colB == "min":
+                            # FIX: Reference the flat dictionary layout directly
                             if current_flag in cpt_structured:
-                                cpt_structured[current_flag]["Sensor"] = safe_float(get_visible_value(data_row, 19))
+                                cpt_structured[current_flag]["Sensor"] = to_float(ws.cell(r, 19).value)
 
                     if cpt_structured:
                         parsed_successfully = True
@@ -649,7 +632,7 @@ with tab2:
                                 if rt_val == 100: continue
                                     
                                 if val_crit in ["mean", "avg", "average"]:
-                                    cpt_structured[current_flag] = {
+                                    cpt_structured[current_flag]["mean"] = {  # FIXED: standardized key destination to "mean"
                                         "tf-1": float(row.get("tf1", 0.0)), "tf-2": float(row.get("tf2", 0.0)),
                                         "tf-3": float(row.get("tf3", 0.0)), "tf-4": float(row.get("tf4", 0.0)),
                                         "tf-5": float(row.get("tf5", 0.0)), "tc-1": float(row.get("tc1", 0.0)),
@@ -669,30 +652,119 @@ with tab2:
                             val_0 = str(r.iloc[0]).strip()
                             if pd.notna(r.iloc[0]) and ("level" in val_0.lower() or "boost" in val_0.lower()):
                                 current_flag = val_0
-                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {}
+                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {"mean": {}}
                                 continue
                             if val_0.lower() in ["section", "min", "nan", ""] or pd.isna(r.iloc[0]): continue
                             clean_tag = normalize_sensor_name(val_0)
                             
                             if current_flag != "Unknown":
                                 if clean_tag == "sensor":
-                                    try: cpt_structured[current_flag]["Sensor"] = float(r.iloc[5])
-                                    except (ValueError, TypeError, IndexError): cpt_structured[current_flag]["Sensor"] = float(r.iloc[1])
+                                    try: cpt_structured[current_flag]["mean"]["Sensor"] = float(r.iloc[5])
+                                    except (ValueError, TypeError, IndexError): cpt_structured[current_flag]["mean"]["Sensor"] = float(r.iloc[1])
                                 else:
                                     mapping_dict = {
                                         "tf1": "tf-1", "tf2": "tf-2", "tf3": "tf-3", "tf4": "tf-4", "tf5": "tf-5",
                                         "tc1": "tc-1", "tc2": "tc-2", "tc3": "tc-3", "s2": "S2"
                                     }
-                                    if clean_tag in mapping_dict: cpt_structured[current_flag][mapping_dict[clean_tag]] = float(r.iloc[8])
+                                    if clean_tag in mapping_dict: cpt_structured[current_flag]["mean"][mapping_dict[clean_tag]] = float(r.iloc[8])
                                     elif "tvc" in clean_tag:
                                         if "tvc_vals" not in cpt_structured[current_flag]: cpt_structured[current_flag]["tvc_vals"] = []
                                         cpt_structured[current_flag]["tvc_vals"].append(float(r.iloc[8]))
 
                         for flg in cpt_structured:
                             if "tvc_vals" in cpt_structured[flg] and cpt_structured[flg]["tvc_vals"]:
-                                cpt_structured[flg]["tvc"] = round(sum(cpt_structured[flg]["tvc_vals"]) / len(cpt_structured[flg]["tvc_vals"]), 4)
+                                cpt_structured[flg]["mean"]["tvc"] = round(sum(cpt_structured[flg]["tvc_vals"]) / len(cpt_structured[flg]["tvc_vals"]), 4)
                                 del cpt_structured[flg]["tvc_vals"]
                         parsed_successfully = True
+                    except Exception: pass
+
+                # --- STRATEGY D: Summary-Block Layout Matrix Format ---
+                if not parsed_successfully:
+                    try:
+                        df_cpt_block = pd.read_excel(repo_cpt_file, sheet_name='Report', header=None)
+                        current_flag = "Unknown"
+                        flag_extracted = {}
+                        for idx, row in df_cpt_block.iterrows():
+                            if pd.notna(row.iloc[9]) and "Test Flag:" in str(row.iloc[9]):
+                                if current_flag != "Unknown" and flag_extracted:
+                                    if "tvc_sum" in flag_extracted: del flag_extracted["tvc_sum"]
+                                    if current_flag not in cpt_structured: cpt_structured[current_flag] = {"mean": {}}
+                                    cpt_structured[current_flag]["mean"] = flag_extracted.copy()
+                                current_flag = str(row.iloc[9]).split(":")[-1].strip()
+                                flag_extracted = {"tf-1": 0.0, "tf-2": 0.0, "tf-3": 0.0, "tf-4": 0.0, "tf-5": 0.0, "tc-1": 0.0, "tc-2": 0.0, "tc-3": 0.0, "tvc": 0.0, "S2": 0.0, "Sensor": 0.0}
+                                continue
+                            if current_flag != "Unknown":
+                                for col_offset in [0, 5, 10]:
+                                    if col_offset < len(row):
+                                        tag = str(row.iloc[col_offset]).strip()
+                                        if tag in ["tF1", "tF2", "tF3", "tF4", "tF5"]:
+                                            try: flag_extracted[f"tf-{tag[-1]}"] = float(row.iloc[col_offset + 1])
+                                            except (ValueError, TypeError): pass
+                                        elif tag in ["tc1", "tc2", "tc3"]:
+                                            try: flag_extracted[f"tc-{tag[-1]}"] = float(row.iloc[col_offset + 1])
+                                            except (ValueError, TypeError): pass
+                                        elif tag in ["tVC1", "tVC2", "tVC3"]:
+                                            if "tvc_sum" not in flag_extracted: flag_extracted["tvc_sum"] = []
+                                            try:
+                                                flag_extracted["tvc_sum"].append(float(row.iloc[col_offset + 1]))
+                                                flag_extracted["tvc"] = round(sum(flag_extracted["tvc_sum"]) / len(flag_extracted["tvc_sum"]), 4)
+                                            except (ValueError, TypeError): pass
+                                        elif tag == "tS21":
+                                            try: flag_extracted["S2"] = float(row.iloc[col_offset + 1])
+                                            except (ValueError, TypeError): pass
+                                        elif tag == "tSensor1":
+                                            try: flag_extracted["Sensor"] = float(row.iloc[col_offset + 2])
+                                            except (ValueError, TypeError): pass
+                        if current_flag != "Unknown" and flag_extracted:
+                            if "tvc_sum" in flag_extracted: del flag_extracted["tvc_sum"]
+                            if current_flag not in cpt_structured: cpt_structured[current_flag] = {"mean": {}}
+                            cpt_structured[current_flag]["mean"] = flag_extracted
+                        if cpt_structured: parsed_successfully = True
+                    except Exception: pass
+
+                # --- STRATEGY E: Horizontal Wide Matrix Block Format ---
+                if not parsed_successfully:
+                    try:
+                        df_cpt_horiz = pd.read_excel(repo_cpt_file, sheet_name=0, header=None)
+                        for r_idx, row in df_cpt_horiz.iterrows():
+                            val_0 = str(row.iloc[0]).strip()
+                            if pd.notna(row.iloc[0]) and any(x in val_0.lower() for x in ["level", "boost"]):
+                                current_flag = val_0
+                                flag_extracted = {
+                                    "tf-1": 0.0, "tf-2": 0.0, "tf-3": 0.0, "tf-4": 0.0, "tf-5": 0.0,
+                                    "tc-1": 0.0, "tc-2": 0.0, "tc-3": 0.0, "tvc": 0.0, "S2": 0.0, "Sensor": 0.0
+                                }
+                                tvc_accumulator = []
+                                
+                                for target_offset in range(1, 11):
+                                    if r_idx + target_offset < len(df_cpt_horiz):
+                                        sub_row = df_cpt_horiz.iloc[r_idx + target_offset]
+                                        for c_idx in range(len(sub_row)):
+                                            tag = str(sub_row.iloc[c_idx]).strip().lower().replace("-", "")
+                                            if tag in ["tf1", "tf2", "tf3", "tf4", "tf5"]:
+                                                try: flag_extracted[f"tf-{tag[-1]}"] = float(sub_row.iloc[c_idx + 1])
+                                                except (ValueError, TypeError): pass
+                                            elif tag in ["tc1", "tc2", "tc3"]:
+                                                try: flag_extracted[f"tc-{tag[-1]}"] = float(sub_row.iloc[c_idx + 1])
+                                                except (ValueError, TypeError): pass
+                                            elif "tvc" in tag:
+                                                try: tvc_accumulator.append(float(sub_row.iloc[c_idx + 1]))
+                                                except (ValueError, TypeError): pass
+                                            elif tag == "s2":
+                                                try: flag_extracted["S2"] = float(sub_row.iloc[c_idx + 1])
+                                                except (ValueError, TypeError): pass
+                                            elif tag == "sensor":
+                                                try: flag_extracted["Sensor"] = float(sub_row.iloc[c_idx + 2])
+                                                except (ValueError, TypeError): pass
+                                
+                                if tvc_accumulator:
+                                    flag_extracted["tvc"] = round(sum(tvc_accumulator) / len(tvc_accumulator), 4)
+                                    
+                                if current_flag not in cpt_structured:
+                                    cpt_structured[current_flag] = {}
+                                cpt_structured[current_flag]["mean"] = flag_extracted
+                        
+                        if cpt_structured: parsed_successfully = True
                     except Exception: pass
 
                 # 3. SAVE DATA MATRIX AND FORCE RETENTION TO HARD DISK
@@ -713,10 +785,11 @@ with tab2:
                 
                 save_memory_to_disk(st.session_state.db)
                 
+                # 4. RESET FILE UPLOADERS BY INCREMENTING WIDGET KEYS
                 st.session_state.p_file_key += 1
                 st.session_state.cpt_file_key += 1
                 
-                st.success(f"🚀 Model Simulator Trained successfully! Hard-Backup saved to storage.")
+                st.success(f"🚀 Model Simulator Trained successfully! Hard-Backup saved to storage file context.")
                 st.rerun()
             except Exception:
                 import traceback

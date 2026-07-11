@@ -171,7 +171,7 @@ if repo_cpt_file is not None:
     try:
         import openpyxl
         # 1. Open the file natively using openpyxl to check row visibility states
-            wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+        wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
             
             # Target the layout sheet safely
             if "ANALYSIS REPORT" in wb.sheetnames:

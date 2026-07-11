@@ -1016,10 +1016,10 @@ with tab3:
                             save_clicked = False
 
                         if save_clicked:
-                            # Save Pulldown Matrix
+                            # 1. Save Pulldown Matrix to records memory
                             record["pulldown_data"] = edited_p_df.iloc[0].to_dict()
 
-                            # Save CPT Matrix
+                            # 2. Save CPT Matrix to records memory
                             new_cpt = {}
                             for _, row in edited_cpt_df.iterrows():
                                 flag = row["Test Flag"]
@@ -1038,7 +1038,20 @@ with tab3:
                                 }
                             record["cpt_data"] = new_cpt
 
+                            # 3. Commit changes to physical disk storage
                             save_memory_to_disk(st.session_state.db)
+                            
+                            # === THE FIXED CACHE FLUSH SYSTEM ===
+                            # Explicitly delete the internal widget states to force a clean component re-read
+                            editor_p_key = f"pulldown_editor_{run_idx}"
+                            editor_c_key = f"cpt_editor_{run_idx}"
+                            
+                            if editor_p_key in st.session_state:
+                                del st.session_state[editor_p_key]
+                            if editor_c_key in st.session_state:
+                                del st.session_state[editor_c_key]
+                            # ====================================
+
                             st.success("✅ Dataset updated successfully.")
                             st.rerun()
                         # --- FIXED INDENTATION END ---

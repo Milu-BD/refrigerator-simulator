@@ -970,14 +970,3 @@ with tab3:
                             st.rerun()
                     else:
                         st.warning("No CPT entries found inside this specific record block.")
-                    print(
-                        r,
-                        colA,
-                        colB,
-                        get_visible_value(r,3),
-                        get_visible_value(r,4),
-                        get_visible_value(r,5),
-                        get_visible_value(r,13),
-                        get_visible_value(r,17),
-                        get_visible_value(r,21),
-                    )

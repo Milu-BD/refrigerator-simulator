@@ -809,8 +809,10 @@ with tab2:
                 
                 st.success(f"🚀 Model Simulator Trained successfully! Hard-Backup saved to storage file context.")
                 st.rerun()
-            except Exception as e:
-                st.exception(e)
+            except Exception:
+                import traceback
+                st.exception(Exception)
+                st.code(traceback.format_exc())
 
 # ================= TAB 3: REVIEWER DASHBOARD =================
 with tab3:

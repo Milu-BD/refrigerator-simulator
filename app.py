@@ -159,19 +159,18 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
 # 5. STREAMLIT USER INTERFACE (TABS) & REPOSITORY LOGIC
 # =================================================================
     
-    # --- STEP 1: RENDER THE FILE UPLOADER FIRST ---
-    repo_cpt_file = st.file_uploader(
+# --- STEP 1: RENDER THE FILE UPLOADER FIRST ---
+repo_cpt_file = st.file_uploader(
     "Upload CPT Calculation Report (Excel)",
     type=["xlsx", "xls"],
     key="repo_cpt_file"
     )
-    
-    # --- STEP 2: RUN STRATEGY A *ONLY* IF A FILE IS PRESENT ---
-    if repo_cpt_file is not None:
-        try:
-            import openpyxl
 
-            # 1. Open the file natively using openpyxl to check row visibility states
+# --- STEP 2: RUN STRATEGY A *ONLY* IF A FILE IS PRESENT ---
+if repo_cpt_file is not None:
+    try:
+        import openpyxl
+        # 1. Open the file natively using openpyxl to check row visibility states
             wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
             
             # Target the layout sheet safely

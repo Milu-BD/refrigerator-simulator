@@ -40,11 +40,19 @@ def save_memory(data):
 # =================================================================
 # 2. STATE INITIALIZATION ON STARTUP
 # =================================================================
+# --- Initialize Session States ---
 if "db" not in st.session_state:
     st.session_state.db = load_memory_from_disk()
 
 if 'reviewer_logged_in' not in st.session_state:
     st.session_state.reviewer_logged_in = False
+
+# 🟢 ADD THESE TWO LINES TO PREVENT THE ATTRIBUTEERROR:
+if "arr_form_id" not in st.session_state:
+    st.session_state.arr_form_id = 0
+
+if "model_form_id" not in st.session_state:
+    st.session_state.model_form_id = 0
 
 # Global configuration constants
 tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', 'tvc', 'S2']

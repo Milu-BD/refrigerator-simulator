@@ -810,7 +810,7 @@ with tab2:
                 st.success(f"🚀 Model Simulator Trained successfully! Hard-Backup saved to storage file context.")
                 st.rerun()
             except Exception as e:
-                st.error(f"Compilation error parsing dataset rows: {str(e)}")
+                st.exception(e)
 
 # ================= TAB 3: REVIEWER DASHBOARD =================
 with tab3:

@@ -565,7 +565,20 @@ with tab2:
                             return float(val)
                         except (ValueError, TypeError):
                             return 0.0
+                    start_row = None
+                    for r in range(1, ws.max_row + 1):
+                        if ws.row_dimensions[r].hidden:
+                            continue
+                        
+                        raw_a = ws.cell(r, 1).value
+                        raw_b = ws.cell(r, 2).value
+                        
+                        # SAFE STRING CONVERSION: Prevents TypeError (NoneType + str)
+                        a = str(raw_a).strip() if raw_a is not None else ""
+                        b = str(raw_b).strip() if raw_b is not None else ""
 
+                        # Now you can safely use 'a' and 'b' for string matching 
+                        # without fear of None values breaking the app.
                     start_row = None
                     for r in range(1, ws.max_row + 1):
                         if ws.row_dimensions[r].hidden:

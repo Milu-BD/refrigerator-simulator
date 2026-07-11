@@ -5,7 +5,6 @@ import pandas as pd
 from sklearn.neighbors import KNeighborsRegressor
 import streamlit as st
 import copy
-import streamlit as str
 
 # Must be the absolute first Streamlit command in the script
 st.set_page_config(page_title="Refrigerator Simulator Hub", layout="wide")
@@ -811,7 +810,6 @@ with tab2:
                 st.rerun()
             except Exception:
                 import traceback
-                st.exception(Exception)
                 st.code(traceback.format_exc())
 
 # ================= TAB 3: REVIEWER DASHBOARD =================

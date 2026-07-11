@@ -174,8 +174,8 @@ if repo_cpt_file is not None:
         wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
             
             # Target the layout sheet safely
-            if "ANALYSIS REPORT" in wb.sheetnames:
-                sheet_name = "ANALYSIS REPORT"
+        if "ANALYSIS REPORT" in wb.sheetnames:
+            sheet_name = "ANALYSIS REPORT"
             elif "CPT CALCULATION REPORT" in wb.sheetnames:
                 sheet_name = "CPT CALCULATION REPORT"
             else:

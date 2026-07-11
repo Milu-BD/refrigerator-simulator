@@ -299,13 +299,25 @@ if existing_volumes:
 selected_volume = st.sidebar.selectbox("Active Refrigerator Model:", existing_volumes if existing_volumes else ["None"])
 
 # --- Delete Model Option (Fixed Overlap) ---
-if existing_volumes and selected_volume != "None":
+if existing_volumes:
+
     st.sidebar.caption("⚠️ Permanently removes this model and all its arrangements")
+
     if st.sidebar.button("🗑️ Delete Selected Model"):
-        del st.session_state.db[selected_volume]
-        save_memory(st.session_state.db)
-        st.sidebar.warning(f"Model '{selected_volume}' deleted.")
-        st.rerun()
+
+        if len(existing_volumes) > 1:
+
+            del st.session_state.db[selected_volume]
+            save_memory(st.session_state.db)
+
+            st.sidebar.success(f"Model '{selected_volume}' deleted.")
+            st.rerun()
+
+        else:
+            st.sidebar.error(
+                "❌ Cannot delete the last remaining model. "
+                "Create another model before deleting this one."
+            )
 
 st.sidebar.markdown("---")
 
@@ -320,16 +332,21 @@ if existing_arrangements:
     # Renamed the label exactly as requested
     selected_arrangement = st.sidebar.selectbox("Select Arrangement of Selected Volume:", existing_arrangements)
     
-    # --- Delete Arrangement Option (Fixed Overlap) ---
-    st.sidebar.caption("⚠️ Removes this arrangement data only")
-    if st.sidebar.button("🗑️ Delete Selected Arrangement"):
-        if len(existing_arrangements) > 1:
-            del st.session_state.db[selected_volume][selected_arrangement]
-            save_memory(st.session_state.db)
-            st.sidebar.warning(f"Arrangement '{selected_arrangement}' deleted.")
-            st.rerun()
-        else:
-            st.sidebar.error("❌ Cannot delete the last remaining arrangement. A model must have at least one arrangement layout. Delete the entire model instead.")
+    # --- Delete Arrangement Option ---
+st.sidebar.caption("⚠️ Removes this arrangement data only")
+
+if st.sidebar.button("🗑️ Delete Selected Arrangement"):
+
+    if len(existing_arrangements) > 1:
+        del st.session_state.db[selected_volume][selected_arrangement]
+        save_memory(st.session_state.db)
+        st.sidebar.success(f"Arrangement '{selected_arrangement}' deleted.")
+        st.rerun()
+    else:
+        st.sidebar.error(
+            "❌ Cannot delete the last remaining arrangement. "
+            "Create another arrangement before deleting it."
+        )
 else:
     selected_arrangement = "None"
     st.sidebar.caption("No arrangements found. Register one below.")

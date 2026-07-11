@@ -530,7 +530,7 @@ with tab2:
                     
                 resolved_sensor = sheet_data.get('sensor', 0.0)
                 
-                # 2. PARSE CPT DATA
+# 2. PARSE CPT DATA
                 cpt_structured = {}
                 parsed_successfully = False
 
@@ -553,6 +553,18 @@ with tab2:
                     # FIXED: Moved outside the conditions so ws and dict are ALWAYS initialized
                     ws = wb[sheet_name]
                     cpt_structured = {}
+
+                    # SAFE CONVERTER SHIELD (Prevents TypeError on unexpected blanks or string text)
+                    def safe_float(val):
+                        if val is None:
+                            return 0.0
+                        try:
+                            if isinstance(val, str):
+                                # Strips out both standard '°C' and special characters '̊C' from strings
+                                val = val.replace("°C", "").replace("̊C", "").strip()
+                            return float(val)
+                        except (ValueError, TypeError):
+                            return 0.0
 
                     start_row = None
                     for r in range(1, ws.max_row + 1):

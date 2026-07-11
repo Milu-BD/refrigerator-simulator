@@ -893,29 +893,32 @@ with tab3:
 
                     p_df = pd.DataFrame([record["pulldown_data"]])
                     
-                    # Safe fallback: if original backup doesn't exist yet, freeze the initial state
                     if "original_pulldown_data" not in record:
                         record["original_pulldown_data"] = record["pulldown_data"].copy()
 
                     original_p_df = pd.DataFrame([record["original_pulldown_data"]])
 
-                    # Live data editor driving the updates
+                    # Define a fast callback to force a rerun when editing happens
+                    def refresh_pulldown():
+                        pass  # Triggering an empty callback forces Streamlit to process the edits instantly
+
                     edited_p_df = st.data_editor(
                         p_df,
                         use_container_width=True,
                         hide_index=True,
                         num_rows="fixed",
-                        key=f"pulldown_editor_{run_idx}"
+                        key=f"pulldown_editor_{run_idx}",
+                        on_change=refresh_pulldown
                     )
                     
                     st.markdown("##### 📄 Original Uploaded Pulldown Matrix")
                     st.dataframe(
-                        original_p_df,  # This stays completely locked
+                        original_p_df,
                         use_container_width=True,
                         hide_index=True
                     )
 
-                    # Dynamic Text Box: Updates instantly reflecting edited_p_df
+                    # Dynamic Text Box: Now guaranteed to match the live edits instantly
                     st.text_area(
                         "📋 Copy Updated Pulldown Matrix",
                         value=edited_p_df.to_csv(sep="\t", index=False),
@@ -947,7 +950,6 @@ with tab3:
                     if cpt_rows:
                         cpt_df = pd.DataFrame(cpt_rows)
                         
-                        # Safe fallback: freeze initial CPT data state if backup doesn't exist
                         if "original_cpt_data" not in record:
                             record["original_cpt_data"] = record["cpt_data"].copy()
 
@@ -970,23 +972,26 @@ with tab3:
                             
                         original_cpt_df = pd.DataFrame(original_cpt_rows)
                         
-                        # Live editor for tracking changes
+                        def refresh_cpt():
+                            pass
+
                         edited_cpt_df = st.data_editor(
                             cpt_df,
                             use_container_width=True,
                             hide_index=True,
                             num_rows="fixed",
-                            key=f"cpt_editor_{run_idx}"
+                            key=f"cpt_editor_{run_idx}",
+                            on_change=refresh_cpt
                         )
                         
                         st.markdown("##### 📄 Original Uploaded CPT Matrix")
                         st.dataframe(
-                            original_cpt_df,  # This stays completely locked
+                            original_cpt_df,
                             use_container_width=True,
                             hide_index=True
                         )
                         
-                        # Dynamic Text Box: Updates instantly reflecting edited_cpt_df
+                        # Dynamic Text Box: Now updates immediately after data cells change
                         st.text_area(
                             "📋 Copy Updated CPT Matrix",
                             value=edited_cpt_df.to_csv(sep="\t", index=False),

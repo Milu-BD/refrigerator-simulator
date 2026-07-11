@@ -277,20 +277,6 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
 
 
 # ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
-# Initialize unique tracking IDs for clearing inputs if they don't exist
-if "model_form_id" not in st.session_state:
-    st.session_state.model_form_id = 0
-if "arr_form_id" not in st.session_state:
-    st.session_state.arr_form_id = 1000
-
-# ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
-# Initialize unique tracking IDs for clearing inputs if they don't exist
-if "model_form_id" not in st.session_state:
-    st.session_state.model_form_id = 0
-if "arr_form_id" not in st.session_state:
-    st.session_state.arr_form_id = 1000
-
-# 1. 📁 Volume Profile Manager Header & Active Model Dropdown (Sorted Ascending)
 st.sidebar.header("📁 Volume Profile Manager")
 existing_volumes = list(st.session_state.db.keys())
 
@@ -298,55 +284,39 @@ if existing_volumes:
     existing_volumes.sort(reverse=False)
 selected_volume = st.sidebar.selectbox("Active Refrigerator Model:", existing_volumes if existing_volumes else ["None"])
 
-# --- Delete Model Option (Fixed Overlap) ---
-if existing_volumes:
-
+# --- Delete Model Option ---
+if existing_volumes and selected_volume != "None":
     st.sidebar.caption("⚠️ Permanently removes this model and all its arrangements")
-
     if st.sidebar.button("🗑️ Delete Selected Model"):
-
         if len(existing_volumes) > 1:
-
             del st.session_state.db[selected_volume]
             save_memory(st.session_state.db)
-
             st.sidebar.success(f"Model '{selected_volume}' deleted.")
             st.rerun()
-
         else:
-            st.sidebar.error(
-                "❌ Cannot delete the last remaining model. "
-                "Create another model before deleting this one."
-            )
+            st.sidebar.error("❌ Cannot delete the last remaining model. Create another model before deleting this one.")
 
 st.sidebar.markdown("---")
 
-# 2. Select Arrangement of Selected Volume & Deletion (Sorted Ascending)
+# 2. Select Arrangement of Selected Volume & Deletion
+existing_arrangements = []
 if selected_volume and selected_volume in st.session_state.db and isinstance(st.session_state.db[selected_volume], dict):
     existing_arrangements = list(st.session_state.db[selected_volume].keys())
-else:
-    existing_arrangements = []
 
 if existing_arrangements:
     existing_arrangements.sort(reverse=False)
-    # Renamed the label exactly as requested
     selected_arrangement = st.sidebar.selectbox("Select Arrangement of Selected Volume:", existing_arrangements)
     
-    # --- Delete Arrangement Option ---
-st.sidebar.caption("⚠️ Removes this arrangement data only")
-
-if st.sidebar.button("🗑️ Delete Selected Arrangement"):
-
-    if len(existing_arrangements) > 1:
-        del st.session_state.db[selected_volume][selected_arrangement]
-        save_memory(st.session_state.db)
-        st.sidebar.success(f"Arrangement '{selected_arrangement}' deleted.")
-        st.rerun()
-    else:
-        st.sidebar.error(
-            "❌ Cannot delete the last remaining arrangement. "
-            "Create another arrangement before deleting it."
-        )
+    # --- Delete Arrangement Option (Now safely guarded inside the positive existence block) ---
+    st.sidebar.caption("⚠️ Removes this arrangement data only")
+    if st.sidebar.button("🗑️ Delete Selected Arrangement"):
+        if len(existing_arrangements) > 1:
+            del st.session_state.db[selected_volume][selected_arrangement]
+            save_memory(st.session_state.db)
+            st.sidebar.success(f"Arrangement '{selected_arrangement}' deleted.")
+            st.rerun()
+        else:
+            st.sidebar.error("❌ Cannot delete the last remaining arrangement. Create another arrangement before deleting it.")
 else:
     selected_arrangement = "None"
     st.sidebar.caption("No arrangements found. Register one below.")
@@ -366,14 +336,12 @@ if st.sidebar.button("Register Arrangement"):
             st.session_state.db[selected_volume][new_arr_clean] = {}
             save_memory(st.session_state.db)
             st.sidebar.success(f"Arrangement '{new_arr_clean}' registered under {selected_volume}!")
-            
-            # FORCE CELL CLEAR: Increment the arrangement form ID to reset input box
             st.session_state.arr_form_id += 1
             st.rerun()
 
 st.sidebar.markdown("---")
 
-# 4. ➕ Register New Volume Model Form (Moved to the end of the sidebar)
+# 4. ➕ Register New Volume Model Form
 st.sidebar.subheader("➕ Register New Volume Model")
 new_vol = st.sidebar.text_input("New Model Name:", placeholder="e.g., 365L", key=f"input_vol_{st.session_state.model_form_id}")
 initial_arr = st.sidebar.text_input("Initial Arrangement Name:", placeholder="e.g., A1", key=f"input_init_{st.session_state.model_form_id}")
@@ -387,8 +355,6 @@ if st.sidebar.button("Add Volume Segment"):
             st.session_state.db[new_vol_clean] = {initial_arr_clean: {}}
             save_memory(st.session_state.db)
             st.success(f"Model {new_vol_clean} initialized with arrangement {initial_arr_clean}!")
-            
-            # FORCE CELL CLEAR: Increment the form ID to reset input boxes
             st.session_state.model_form_id += 1
             st.rerun()
         else:
@@ -1070,3 +1036,14 @@ with tab3:
                             st.rerun()
                     else:
                         st.warning("No CPT entries found inside this specific record block.")
+                    print(
+                        r,
+                        colA,
+                        colB,
+                        get_visible_value(r,3),
+                        get_visible_value(r,4),
+                        get_visible_value(r,5),
+                        get_visible_value(r,13),
+                        get_visible_value(r,17),
+                        get_visible_value(r,21),
+                    )

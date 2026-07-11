@@ -873,11 +873,11 @@ with tab3:
         else:
             st.success(f"Found {len(records)} trained datasets stored in hard backup matrix memory loop.")
             
-            # --- LOOP THROUGH AND RENDER EACH TRAINED DATASET ---
+        # --- LOOP THROUGH AND RENDER EACH TRAINED DATASET ---
             for run_idx, record in enumerate(records):
                 with st.expander(f"📦 Trained Dataset Record #{run_idx + 1}", expanded=(run_idx == 0)):
                     
-                    # Row management buttons (Optional deletion system placeholder)
+                    # Row management buttons
                     c_btn1, c_btn2 = st.columns([4, 1])
                     with c_btn1:
                         st.markdown(f"**Baseline Sensor Target Setting:** `{record.get('pulldown_baseline_sensor', 0.0)}°C`")
@@ -887,6 +887,13 @@ with tab3:
                             save_memory_to_disk(st.session_state.db)
                             st.success("Dataset purged successfully!")
                             st.rerun()
+
+                    # Initialize a state version counter for this specific loop record if it doesn't exist
+                    version_key = f"ver_{p_inspect_key}_{c_inspect_key}_{run_idx}"
+                    if version_key not in st.session_state:
+                        st.session_state[version_key] = 1
+                    
+                    current_ver = st.session_state[version_key]
 
                     # Section A: Display Pulldown Data Summary Table
                     st.markdown("#### 🔹 Pulldown Baseline Layer Matrix")
@@ -898,16 +905,16 @@ with tab3:
 
                     original_p_df = pd.DataFrame([record["original_pulldown_data"]])
 
-                    # Define a fast callback to force a rerun when editing happens
                     def refresh_pulldown():
-                        pass  # Triggering an empty callback forces Streamlit to process the edits instantly
+                        pass
 
+                    # Key dynamically alters based on the current save version string
                     edited_p_df = st.data_editor(
                         p_df,
                         use_container_width=True,
                         hide_index=True,
                         num_rows="fixed",
-                        key=f"pulldown_editor_{run_idx}",
+                        key=f"p_edit_{run_idx}_v{current_ver}",
                         on_change=refresh_pulldown
                     )
                     
@@ -918,12 +925,11 @@ with tab3:
                         hide_index=True
                     )
 
-                    # Dynamic Text Box: Now guaranteed to match the live edits instantly
                     st.text_area(
                         "📋 Copy Updated Pulldown Matrix",
                         value=edited_p_df.to_csv(sep="\t", index=False),
                         height=180,
-                        key=f"pulldown_copy_{run_idx}"
+                        key=f"p_copy_{run_idx}_v{current_ver}"
                     )
                     
                     # Section B: Display CPT Multivariable Flags Data Matrix
@@ -980,7 +986,7 @@ with tab3:
                             use_container_width=True,
                             hide_index=True,
                             num_rows="fixed",
-                            key=f"cpt_editor_{run_idx}",
+                            key=f"cpt_edit_{run_idx}_v{current_ver}",
                             on_change=refresh_cpt
                         )
                         
@@ -991,12 +997,11 @@ with tab3:
                             hide_index=True
                         )
                         
-                        # Dynamic Text Box: Now updates immediately after data cells change
                         st.text_area(
                             "📋 Copy Updated CPT Matrix",
                             value=edited_cpt_df.to_csv(sep="\t", index=False),
                             height=220,
-                            key=f"cpt_copy_{run_idx}"
+                            key=f"cpt_copy_{run_idx}_v{current_ver}"
                         )
 
                         # Detect changes
@@ -1008,7 +1013,7 @@ with tab3:
                             st.success("🟡 Unsaved changes detected.")
                             save_clicked = st.button(
                                 "💾 Save Edited Dataset",
-                                key=f"save_dataset_{run_idx}",
+                                key=f"save_dataset_{run_idx}_v{current_ver}",
                                 type="primary"
                             )
                         else:
@@ -1016,10 +1021,10 @@ with tab3:
                             save_clicked = False
 
                         if save_clicked:
-                            # 1. Save Pulldown Matrix to records memory
+                            # Save Pulldown Matrix
                             record["pulldown_data"] = edited_p_df.iloc[0].to_dict()
 
-                            # 2. Save CPT Matrix to records memory
+                            # Save CPT Matrix
                             new_cpt = {}
                             for _, row in edited_cpt_df.iterrows():
                                 flag = row["Test Flag"]
@@ -1038,24 +1043,13 @@ with tab3:
                                 }
                             record["cpt_data"] = new_cpt
 
-                            # 3. Commit changes to physical disk storage
+                            # Commit file data structure changes to the physical disk 
                             save_memory_to_disk(st.session_state.db)
                             
-                            # === THE FIXED CACHE FLUSH SYSTEM ===
-                            # Explicitly delete the internal widget states to force a clean component re-read
-                            editor_p_key = f"pulldown_editor_{run_idx}"
-                            editor_c_key = f"cpt_editor_{run_idx}"
+                            # INCREMENT VERSION: Wipes out the stale data cache instantly on rerun
+                            st.session_state[version_key] += 1
                             
-                            if editor_p_key in st.session_state:
-                                del st.session_state[editor_p_key]
-                            if editor_c_key in st.session_state:
-                                del st.session_state[editor_c_key]
-                            # ====================================
-
                             st.success("✅ Dataset updated successfully.")
                             st.rerun()
-                        # --- FIXED INDENTATION END ---
                     else:
-                        st.warning(
-                            "No CPT entries found inside this specific record block."
-                        )
+                        st.warning("No CPT entries found inside this specific record block.")

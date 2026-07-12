@@ -113,7 +113,6 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
                 if 'cpt_data' not in record or flag not in record["cpt_data"]:
                     continue
 
-                # Cleanly parse pulldown features, fallback to 0.0 if NaN or None occurs
                 def clean_val(v):
                     if v is None or pd.isna(v):
                         return 0.0
@@ -129,23 +128,20 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
 
                 outputs = record["cpt_data"][flag]
                 
+                # We remove 'Sensor' from the ML training targets array (y_train) 
+                # because we don't want the machine learning model to guess it.
                 y_vector = (
                     [clean_val(outputs.get(f, 0.0)) for f in tc_features]
-                    + [
-                        clean_val(outputs.get("S2", 0.0)),
-                        clean_val(outputs.get("Sensor", 0.0))
-                    ]
+                    + [clean_val(outputs.get("S2", 0.0))]
                 )
 
                 X_train.append(p_base)
                 y_train.append(y_vector)
 
             if len(X_train) >= 1:
-                # Double check to ensure absolutely zero NaN values make it to sklearn arrays
                 X_arr = np.nan_to_num(np.array(X_train, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
                 y_arr = np.nan_to_num(np.array(y_train, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
                 
-                # Sanitize new query vector as well
                 clean_query = [clean_val(v) for v in new_pulldown] + [clean_val(target_s)]
                 query_vector = np.nan_to_num(np.array(clean_query, dtype=np.float64).reshape(1, -1), nan=0.0)
                 
@@ -166,7 +162,7 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
                     "tc-3": round(prediction[7], 2),
                     "tvc": round(prediction[8], 2),
                     "S2": round(prediction[9], 2),
-                    "Sensor": round(prediction[10], 2)
+                    "Sensor": round(float(target_s), 2)  # 🟢 FIX: Directly uses your manual input point
                 }
                 predicted_modes.append(row)
                 

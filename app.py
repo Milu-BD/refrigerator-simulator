@@ -565,7 +565,8 @@ with tab2:
             key=f"r_cpt_file_{p_repo_key}_{c_repo_key}_v_{st.session_state.cpt_file_key}"
         )
         
-    if repo_pulldown_file and repo_cpt_file:
+# 🟢 Change the line to look exactly like this:
+    if repo_pulldown_file is not None and repo_cpt_file is not None:
         if st.button("💾 Process and Train Simulator Memory Buffer", type="primary"):
             try:
                 # 1. PARSE PULLDOWN DATA

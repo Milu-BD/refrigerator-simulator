@@ -94,70 +94,74 @@ def verify_db_structure(vol, arr_name, p_amb, c_amb):
 # =================================================================
 def run_automated_simulation(volume_records, new_pulldown, target_sensors):
     """
-    Generates a single, combined prediction dataframe where each row 
-    represents one manual Sensor Query Point.
+    Generates a consolidated prediction dataframe where each row represents one 
+    distinct Sensor Query Point by evaluating how past levels correspond to target conditions.
     """
     if not volume_records:
         return pd.DataFrame()
         
     predicted_rows = []
     
-    # Process each query point as an individual row target
+    # Process each user manual query point as an independent prediction row
     for idx, target_s in enumerate(target_sensors):
         X_train = []
         y_train = []
+
+        def clean_val(v):
+            if v is None or pd.isna(v):
+                return 0.0
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                return 0.0
 
         for record in volume_records:
             if 'cpt_data' not in record or not record['cpt_data']:
                 continue
 
-            # Cleanly parse pulldown features
-            def clean_val(v):
-                if v is None or pd.isna(v):
-                    return 0.0
-                try:
-                    return float(v)
-                except (ValueError, TypeError):
-                    return 0.0
+            # Pulldown base features
+            p_features = [clean_val(record["pulldown_data"].get(f, 0.0)) for f in tc_features]
+            p_baseline = clean_val(record.get("pulldown_baseline_sensor", 0.0))
 
-            # Base features from pulldown matrix
-            p_base = (
-                [clean_val(record["pulldown_data"].get(f, 0.0)) for f in tc_features]
-                + [clean_val(record.get("pulldown_baseline_sensor", 0.0))]
-            )
+            # Treat each flag/level as a distinct data point to capture variance across sensor points
+            for flag, level_data in record["cpt_data"].items():
+                # Extract historical sensor cut-out temperature for this level block
+                hist_sensor = clean_val(level_data.get("Sensor", level_data.get("sensor", 0.0)))
+                
+                # If Sensor value is missing or zero, use a default fallback matching common levels
+                if hist_sensor == 0.0:
+                    if "1" in flag: hist_sensor = -27.5
+                    elif "2" in flag: hist_sensor = -27.0
+                    elif "3" in flag: hist_sensor = -25.5
+                    elif "4" in flag: hist_sensor = -24.0
+                    elif "5" in flag: hist_sensor = -21.0
 
-            # Average all available multi-level entries into a single profile vector per database record
-            agg_outputs = {f: [] for f in tc_features}
-            agg_outputs["S2"] = []
-            
-            for flag, data in record["cpt_data"].items():
-                for f in tc_features:
-                    if f in data: agg_outputs[f].append(clean_val(data[f]))
-                if "S2" in data: agg_outputs["S2"].append(clean_val(data["S2"]))
-            
-            # Form final consolidated target training row vector
-            y_vector = (
-                [np.mean(agg_outputs[f]) if agg_outputs[f] else 0.0 for f in tc_features]
-                + [np.mean(agg_outputs["S2"]) if agg_outputs["S2"] else 0.0]
-            )
+                # Formulate training input: Pulldown context matrix + specific level's target sensor value
+                train_input = p_features + [p_baseline, hist_sensor]
+                
+                # Target output values to be predicted
+                train_target = [clean_val(level_data.get(f, 0.0)) for f in tc_features] + [clean_val(level_data.get("S2", 0.0))]
 
-            X_train.append(p_base)
-            y_train.append(y_vector)
+                X_train.append(train_input)
+                y_train.append(train_target)
 
         if len(X_train) >= 1:
-            # Handle scikit-learn training format sanitation 
             X_arr = np.nan_to_num(np.array(X_train, dtype=np.float64), nan=0.0)
             y_arr = np.nan_to_num(np.array(y_train, dtype=np.float64), nan=0.0)
             
-            clean_query = [clean_val(v) for v in new_pulldown] + [clean_val(target_s)]
-            query_vector = np.nan_to_num(np.array(clean_query, dtype=np.float64).reshape(1, -1), nan=0.0)
+            # Construct active query: current telemetry + the specific target query sensor step
+            current_baseline = clean_val(new_pulldown[-1]) if len(new_pulldown) == 10 else 35.0
+            query_vector = np.nan_to_num(
+                np.array([clean_val(v) for v in new_pulldown] + [current_baseline, clean_val(target_s)], dtype=np.float64).reshape(1, -1), 
+                nan=0.0
+            )
             
-            knn = KNeighborsRegressor(n_neighbors=min(2, len(X_arr)), weights='distance')
+            # Run distance-weighted interpolation to compute dynamic shift across query points
+            knn = KNeighborsRegressor(n_neighbors=min(3, len(X_arr)), weights='distance')
             knn.fit(X_arr, y_arr)
             
             prediction = knn.predict(query_vector)[0]
             
-            # Map values into a single tidy row item labeled by the Sensor Query Target
             row = {
                 "Sensor Value": f"{target_s} °C",
                 "tf-1": round(prediction[0], 2),

@@ -447,7 +447,8 @@ with tab1:
             type=["xlsx", "xls"], key=f"sim_file_upload_{p_key}_{c_key}"
         )
 
-        if sim_pulldown_file and sim_pulldown_file != st.session_state.last_uploaded_sim_file:
+        if sim_pulldown_file is not None:
+            if st.session_state.last_uploaded_sim_file != sim_pulldown_file.name
             try:
                 # Read first available sheet dynamically
                 df_sim_p = pd.read_excel(sim_pulldown_file, sheet_name=0, header=None)
@@ -479,7 +480,7 @@ with tab1:
                 elif 'tvc' in sheet_data:
                     st.session_state.active_pulldown_form['tvc'] = sheet_data['tvc']
 
-                st.session_state.last_uploaded_sim_file = sim_pulldown_file
+                st.session_state.last_uploaded_sim_file = sim_pulldown_file.name
                 # Increment key version to instantly clear old component cache and force update UI inputs
                 st.session_state.sim_ver += 1
                 st.toast("🟢 Parsed values pulled from sheet!", icon="📊")
@@ -508,7 +509,8 @@ with tab1:
             
         # 🟢 FIX: Moved outside the 'for' loop so it only prints a single clean separator line
         st.markdown("---")
-        
+        if sim_pulldown_file is None:
+            st.session_state.last_uploaded_sim_file = None
 # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
         

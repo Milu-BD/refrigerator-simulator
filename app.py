@@ -6,6 +6,13 @@ from sklearn.neighbors import KNeighborsRegressor
 import streamlit as st
 import copy
 
+# 🟢 Add this block near the top of app.py to initialize session state variables
+if "p_file_key" not in st.session_state:
+    st.session_state.p_file_key = 0
+
+if "cpt_file_key" not in st.session_state:
+    st.session_state.cpt_file_key = 0
+
 # Must be the absolute first Streamlit command in the script
 st.set_page_config(page_title="Refrigerator Simulator Hub", layout="wide")
 

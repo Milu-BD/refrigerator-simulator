@@ -446,7 +446,8 @@ with tab1:
             f"Auto-fill fields from local Pulldown Report ({sim_p_ambient})", 
             type=["xlsx", "xls"], key=f"sim_file_upload_{p_key}_{c_key}"
         )
-
+        if sim_pulldown_file is None:
+            st.session_state.last_uploaded_sim_file = None
         if sim_pulldown_file is not None:
             if st.session_state.last_uploaded_sim_file != sim_pulldown_file.name
             try:
@@ -509,8 +510,6 @@ with tab1:
             
         # 🟢 FIX: Moved outside the 'for' loop so it only prints a single clean separator line
         st.markdown("---")
-        if sim_pulldown_file is None:
-            st.session_state.last_uploaded_sim_file = None
 # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
         

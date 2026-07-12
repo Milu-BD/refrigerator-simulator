@@ -418,6 +418,13 @@ with tab1:
     verify_db_structure(selected_volume, selected_arrangement, p_key, c_key)
     vol_records = st.session_state.db[selected_volume][selected_arrangement][p_key][c_key]
     
+    # Initialize version counters to force-refresh fields upon upload
+    if "sim_ver" not in st.session_state:
+        st.session_state.sim_ver = 0
+    if 'active_pulldown_form' not in st.session_state:
+        st.session_state.active_pulldown_form = {}
+        st.session_state.last_uploaded_sim_file = None
+
     if not vol_records:
         st.warning(f"⚠️ No matching profiles found under arrangement **{selected_arrangement}** for **Pulldown: {sim_p_ambient}** linked to **CPT: {sim_c_ambient}**.")
     else:
@@ -427,10 +434,6 @@ with tab1:
             f"Auto-fill fields from local Pulldown Report ({sim_p_ambient})", 
             type=["xlsx", "xls"], key=f"sim_file_upload_{p_key}_{c_key}"
         )
-        
-        if 'active_pulldown_form' not in st.session_state:
-            st.session_state.active_pulldown_form = {}
-            st.session_state.last_uploaded_sim_file = None
 
         if sim_pulldown_file and sim_pulldown_file != st.session_state.last_uploaded_sim_file:
             try:
@@ -465,7 +468,10 @@ with tab1:
                     st.session_state.active_pulldown_form['tvc'] = sheet_data['tvc']
 
                 st.session_state.last_uploaded_sim_file = sim_pulldown_file
+                # Increment key version to instantly clear old component cache and force update UI inputs
+                st.session_state.sim_ver += 1
                 st.toast("🟢 Parsed values pulled from sheet!", icon="📊")
+                st.rerun()
             except Exception as e:
                 st.error(f"Error parsing configuration: {str(e)}")
 
@@ -474,16 +480,22 @@ with tab1:
         default_defaults = {'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 'tc-2': 1.6, 'tc-3': 0.5, 'tvc': 8.1, 'S2': 41.1}
         
         for i, feat in enumerate(tc_features):
-            # Prioritize extracted session state values over default placeholders
+            # Prioritize extracted file data if available, otherwise use defaults
             if feat in st.session_state.active_pulldown_form:
                 curr_val = st.session_state.active_pulldown_form[feat]
             else:
                 curr_val = default_defaults.get(feat, 0.0)
                 
-            val = u_cols[i].number_input(f"{feat}:", value=curr_val, key=f"sim_inp_{p_key}_{c_key}_{feat}")
+            # Bound dynamic widget version to key parameters to force a redraw when new files parse
+            val = u_cols[i].number_input(
+                f"{feat}:", 
+                value=curr_val, 
+                key=f"sim_inp_{p_key}_{c_key}_{feat}_v{st.session_state.sim_ver}"
+            )
             new_pulldown_input.append(val)
             
         st.markdown("---")
+        # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
         num_targets = st.number_input("Number of target sensor points (1 to 7):", min_value=1, max_value=7, value=3, step=1)
         
@@ -495,6 +507,7 @@ with tab1:
             
         if st.button("🚀 Generate Predictive CPT Dataset Matrices", type="primary"):
             with st.spinner("Interpolating variant mappings..."):
+                # Generates the predictive simulation using manually adjusted/live values in the UI cells
                 simulation_outputs = run_automated_simulation(vol_records, new_pulldown_input, target_sensors)
                 if not simulation_outputs:
                     st.error("Simulation engine execution error.")
@@ -502,17 +515,6 @@ with tab1:
                     for key_title, df_res in simulation_outputs.items():
                         st.markdown(f"### 📊 Predictions for {key_title}")
                         st.dataframe(df_res, use_container_width=True, hide_index=True)
-
-
-# ================= INITIALIZE STATE ON STARTUP =================
-if "db" not in st.session_state:
-    st.session_state.db = load_memory_from_disk()
-
-if "p_file_key" not in st.session_state:
-    st.session_state.p_file_key = 0
-if "cpt_file_key" not in st.session_state:
-    st.session_state.cpt_file_key = 0
-
 
 # ================= TAB 2: DATA REPOSITORY ROOM =================
 with tab2:

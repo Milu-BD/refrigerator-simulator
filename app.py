@@ -509,14 +509,23 @@ with tab1:
         # 🟢 FIX: Moved outside the 'for' loop so it only prints a single clean separator line
         st.markdown("---")
         
-        # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
+# ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
-        num_targets = st.number_input("Number of target sensor points (1 to 7):", min_value=1, max_value=7, value=3, step=1)
+        
+        # 🟢 CHANGED: Set value=5 so it defaults to 5 sensor fields automatically on startup
+        num_targets = st.number_input("Number of target sensor points (1 to 7):", min_value=1, max_value=7, value=5, step=1)
         
         target_sensors = []
         s_cols = st.columns(int(num_targets))
         for idx in range(int(num_targets)):
-            s_val = s_cols[idx].number_input(f"Sensor Query Point {idx+1} (°C):", value=-10.0 + (idx * 2.5), key=f"q_s_{p_key}_{c_key}_{idx}")
+            # Set up default sensor values for the 5 points (adjust the start value or step as needed)
+            default_sensor_val = -27.5 + (idx * 1.5) 
+            
+            s_val = s_cols[idx].number_input(
+                f"Sensor Query Point {idx+1} (°C):", 
+                value=default_sensor_val, 
+                key=f"q_s_{p_key}_{c_key}_{idx}"
+            )
             target_sensors.append(s_val)
             
         if st.button("🚀 Generate Predictive CPT Dataset Matrices", type="primary"):

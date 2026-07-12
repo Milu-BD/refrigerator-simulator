@@ -93,84 +93,89 @@ def verify_db_structure(vol, arr_name, p_amb, c_amb):
 # 4. ADVANCED INTERPOLATION ENGINE
 # =================================================================
 def run_automated_simulation(volume_records, new_pulldown, target_sensors):
-    results_map = {}
+    """
+    Generates a single, combined prediction dataframe where each row 
+    represents one manual Sensor Query Point.
+    """
     if not volume_records:
-        return results_map
+        return pd.DataFrame()
         
+    predicted_rows = []
+    
+    # Process each query point as an individual row target
     for idx, target_s in enumerate(target_sensors):
-        predicted_modes = []
-        all_flags = set()
+        X_train = []
+        y_train = []
+
         for record in volume_records:
-            if 'cpt_data' in record and isinstance(record['cpt_data'], dict):
-                for flag in record['cpt_data'].keys():
-                    all_flags.add(flag)
-                
-        for flag in sorted(all_flags):
-            X_train = []
-            y_train = []
+            if 'cpt_data' not in record or not record['cpt_data']:
+                continue
 
-            for record in volume_records:
-                if 'cpt_data' not in record or flag not in record["cpt_data"]:
-                    continue
+            # Cleanly parse pulldown features
+            def clean_val(v):
+                if v is None or pd.isna(v):
+                    return 0.0
+                try:
+                    return float(v)
+                except (ValueError, TypeError):
+                    return 0.0
 
-                def clean_val(v):
-                    if v is None or pd.isna(v):
-                        return 0.0
-                    try:
-                        return float(v)
-                    except (ValueError, TypeError):
-                        return 0.0
+            # Base features from pulldown matrix
+            p_base = (
+                [clean_val(record["pulldown_data"].get(f, 0.0)) for f in tc_features]
+                + [clean_val(record.get("pulldown_baseline_sensor", 0.0))]
+            )
 
-                p_base = (
-                    [clean_val(record["pulldown_data"].get(f, 0.0)) for f in tc_features]
-                    + [clean_val(record.get("pulldown_baseline_sensor", 0.0))]
-                )
-
-                outputs = record["cpt_data"][flag]
-                
-                # We remove 'Sensor' from the ML training targets array (y_train) 
-                # because we don't want the machine learning model to guess it.
-                y_vector = (
-                    [clean_val(outputs.get(f, 0.0)) for f in tc_features]
-                    + [clean_val(outputs.get("S2", 0.0))]
-                )
-
-                X_train.append(p_base)
-                y_train.append(y_vector)
-
-            if len(X_train) >= 1:
-                X_arr = np.nan_to_num(np.array(X_train, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
-                y_arr = np.nan_to_num(np.array(y_train, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
-                
-                clean_query = [clean_val(v) for v in new_pulldown] + [clean_val(target_s)]
-                query_vector = np.nan_to_num(np.array(clean_query, dtype=np.float64).reshape(1, -1), nan=0.0)
-                
-                knn = KNeighborsRegressor(n_neighbors=min(2, len(X_arr)), weights='distance')
-                knn.fit(X_arr, y_arr)
-                
-                prediction = knn.predict(query_vector)[0]
-                
-                row = {
-                    "TestFlag": flag,
-                    "tf-1": round(prediction[0], 2),
-                    "tf-2": round(prediction[1], 2),
-                    "tf-3": round(prediction[2], 2),
-                    "tf-4": round(prediction[3], 2),
-                    "tf-5": round(prediction[4], 2),
-                    "tc-1": round(prediction[5], 2),
-                    "tc-2": round(prediction[6], 2),
-                    "tc-3": round(prediction[7], 2),
-                    "tvc": round(prediction[8], 2),
-                    "S2": round(prediction[9], 2),
-                    "Sensor": round(float(target_s), 2)  # 🟢 FIX: Directly uses your manual input point
-                }
-                predicted_modes.append(row)
-                
-        if predicted_modes:
-            key_title = f"🎯 Simulation Run Profile (Query Target Sensor: {target_s}°C)"
-            results_map[key_title] = pd.DataFrame(predicted_modes)
+            # Average all available multi-level entries into a single profile vector per database record
+            agg_outputs = {f: [] for f in tc_features}
+            agg_outputs["S2"] = []
             
-    return results_map
+            for flag, data in record["cpt_data"].items():
+                for f in tc_features:
+                    if f in data: agg_outputs[f].append(clean_val(data[f]))
+                if "S2" in data: agg_outputs["S2"].append(clean_val(data["S2"]))
+            
+            # Form final consolidated target training row vector
+            y_vector = (
+                [np.mean(agg_outputs[f]) if agg_outputs[f] else 0.0 for f in tc_features]
+                + [np.mean(agg_outputs["S2"]) if agg_outputs["S2"] else 0.0]
+            )
+
+            X_train.append(p_base)
+            y_train.append(y_vector)
+
+        if len(X_train) >= 1:
+            # Handle scikit-learn training format sanitation 
+            X_arr = np.nan_to_num(np.array(X_train, dtype=np.float64), nan=0.0)
+            y_arr = np.nan_to_num(np.array(y_train, dtype=np.float64), nan=0.0)
+            
+            clean_query = [clean_val(v) for v in new_pulldown] + [clean_val(target_s)]
+            query_vector = np.nan_to_num(np.array(clean_query, dtype=np.float64).reshape(1, -1), nan=0.0)
+            
+            knn = KNeighborsRegressor(n_neighbors=min(2, len(X_arr)), weights='distance')
+            knn.fit(X_arr, y_arr)
+            
+            prediction = knn.predict(query_vector)[0]
+            
+            # Map values into a single tidy row item labeled by the Sensor Query Target
+            row = {
+                "Sensor Value": f"{target_s} °C",
+                "tf-1": round(prediction[0], 2),
+                "tf-2": round(prediction[1], 2),
+                "tf-3": round(prediction[2], 2),
+                "tf-4": round(prediction[3], 2),
+                "tf-5": round(prediction[4], 2),
+                "tc-1": round(prediction[5], 2),
+                "tc-2": round(prediction[6], 2),
+                "tc-3": round(prediction[7], 2),
+                "tvc": round(prediction[8], 2),
+                "S2": round(prediction[9], 2)
+            }
+            predicted_rows.append(row)
+            
+    if predicted_rows:
+        return pd.DataFrame(predicted_rows)
+    return pd.DataFrame()
 
 
 # =================================================================
@@ -489,8 +494,7 @@ with tab1:
                 key=f"sim_inp_{p_key}_{c_key}_{feat}_v{st.session_state.sim_ver}"
             )
             new_pulldown_input.append(val)
-            
-        st.markdown("---")
+            st.markdown("---")
         # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
         num_targets = st.number_input("Number of target sensor points (1 to 7):", min_value=1, max_value=7, value=3, step=1)
@@ -502,15 +506,14 @@ with tab1:
             target_sensors.append(s_val)
             
         if st.button("🚀 Generate Predictive CPT Dataset Matrices", type="primary"):
-            with st.spinner("Interpolating variant mappings..."):
-                # Generates the predictive simulation using manually adjusted/live values in the UI cells
-                simulation_outputs = run_automated_simulation(vol_records, new_pulldown_input, target_sensors)
-                if not simulation_outputs:
-                    st.error("Simulation engine execution error.")
+            with st.spinner("Processing automated interpolation runs..."):
+                df_final_predictions = run_automated_simulation(vol_records, new_pulldown_input, target_sensors)
+                
+                if df_final_predictions.empty:
+                    st.error("Simulation engine run failed. Make sure dataset memory contains recorded instances.")
                 else:
-                    for key_title, df_res in simulation_outputs.items():
-                        st.markdown(f"### 📊 Predictions for {key_title}")
-                        st.dataframe(df_res, use_container_width=True, hide_index=True)
+                    st.markdown("### 📊 Consolidated Predictive Simulation Output Matrix")
+                    st.dataframe(df_final_predictions, use_container_width=True, hide_index=True)
 
 # ================= TAB 2: DATA REPOSITORY ROOM =================
 with tab2:

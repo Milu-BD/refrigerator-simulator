@@ -286,21 +286,34 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
 
 # ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
 st.sidebar.header("📁 Volume Profile Manager")
-existing_volumes = list(st.session_state.db.keys())
 
+# Clean up empty strings or accidental "None" literal string keys if they exist in memory
+if "None" in st.session_state.db:
+    del st.session_state.db["None"]
+if "" in st.session_state.db:
+    del st.session_state.db[""]
+
+existing_volumes = list(st.session_state.db.keys())
 if existing_volumes:
     existing_volumes.sort(reverse=False)
-selected_volume = st.sidebar.selectbox("Active Refrigerator Model:", existing_volumes if existing_volumes else ["None"])
+
+# Render selectbox with actual available volumes
+selected_volume = st.sidebar.selectbox(
+    "Active Refrigerator Model:", 
+    existing_volumes if existing_volumes else ["None"]
+)
 
 # --- Delete Model Option ---
-if existing_volumes and selected_volume != "None":
+if existing_volumes:
     st.sidebar.caption("⚠️ Permanently removes this model and all its arrangements")
     if st.sidebar.button("🗑️ Delete Selected Model"):
+        # Allow deletion if there is at least one other valid model left
         if len(existing_volumes) > 1:
-            del st.session_state.db[selected_volume]
-            save_memory(st.session_state.db)
-            st.sidebar.success(f"Model '{selected_volume}' deleted.")
-            st.rerun()
+            if selected_volume in st.session_state.db:
+                del st.session_state.db[selected_volume]
+                save_memory(st.session_state.db)
+                st.sidebar.success(f"Model '{selected_volume}' deleted successfully.")
+                st.rerun()
         else:
             st.sidebar.error("❌ Cannot delete the last remaining model. Create another model before deleting this one.")
 
@@ -315,7 +328,7 @@ if existing_arrangements:
     existing_arrangements.sort(reverse=False)
     selected_arrangement = st.sidebar.selectbox("Select Arrangement of Selected Volume:", existing_arrangements)
     
-    # --- Delete Arrangement Option (Now safely guarded inside the positive existence block) ---
+    # --- Delete Arrangement Option ---
     st.sidebar.caption("⚠️ Removes this arrangement data only")
     if st.sidebar.button("🗑️ Delete Selected Arrangement"):
         if len(existing_arrangements) > 1:

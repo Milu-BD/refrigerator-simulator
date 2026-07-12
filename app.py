@@ -393,30 +393,49 @@ with tab1:
     if not vol_records:
         st.warning(f"⚠️ No matching profiles found under arrangement **{selected_arrangement}** for **Pulldown: {sim_p_ambient}** linked to **CPT: {sim_c_ambient}**.")
     else:
+        # ================= STEP 1: AUTOMATED SIMULATOR PARSER =================
         st.markdown("#### Step 1: Input Current Pulldown Telemetry Vector")
         sim_pulldown_file = st.file_uploader(
             f"Auto-fill fields from local Pulldown Report ({sim_p_ambient})", 
-            type=["xlsx"], key=f"sim_file_upload_{p_key}_{c_key}"
+            type=["xlsx", "xls"], key=f"sim_file_upload_{p_key}_{c_key}"
         )
         
         if 'active_pulldown_form' not in st.session_state:
-            st.session_state.active_pulldown_form = {feat: 0.0 for feat in tc_features}
+            st.session_state.active_pulldown_form = {}
             st.session_state.last_uploaded_sim_file = None
 
         if sim_pulldown_file and sim_pulldown_file != st.session_state.last_uploaded_sim_file:
             try:
-                df_sim_p = pd.read_excel(sim_pulldown_file, sheet_name='Summary', header=1)
-                df_sim_p.columns = [str(c).strip() for c in df_sim_p.columns]
-                df_sim_p.iloc[:, 0] = df_sim_p.iloc[:, 0].astype(str).str.strip()
-                df_sim_p.set_index(df_sim_p.columns[0], inplace=True)
+                # Read first available sheet dynamically
+                df_sim_p = pd.read_excel(sim_pulldown_file, sheet_name=0, header=None)
+                df_sim_p[0] = df_sim_p[0].astype(str).apply(normalize_sensor_name)
                 
+                sheet_data = {}
+                for _, row in df_sim_p.dropna(subset=[0]).iterrows():
+                    lbl = row[0]
+                    if lbl not in sheet_data:
+                        try:
+                            sheet_data[lbl] = float(row[1])
+                        except (ValueError, TypeError):
+                            continue
+
                 mapping_keys = {
                     'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
-                    'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'tvc':'tvc', 'S2':'S2'
+                    'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'S2':'s2'
                 }
-                for feat, xl_label in mapping_keys.items():
-                    if xl_label in df_sim_p.index:
-                        st.session_state.active_pulldown_form[feat] = float(df_sim_p.loc[xl_label, 'avg'])
+                
+                # Extract individual thermocouple cells
+                for feat, normalized_label in mapping_keys.items():
+                    if normalized_label in sheet_data:
+                        st.session_state.active_pulldown_form[feat] = sheet_data[normalized_label]
+                        
+                # Compute average for tvc from subcomponents if available
+                tvc_values = [sheet_data[lbl] for lbl in ['tvc1', 'tvc2', 'tvc3'] if lbl in sheet_data]
+                if tvc_values:
+                    st.session_state.active_pulldown_form['tvc'] = round(sum(tvc_values) / len(tvc_values), 4)
+                elif 'tvc' in sheet_data:
+                    st.session_state.active_pulldown_form['tvc'] = sheet_data['tvc']
+
                 st.session_state.last_uploaded_sim_file = sim_pulldown_file
                 st.toast("🟢 Parsed values pulled from sheet!", icon="📊")
             except Exception as e:
@@ -427,7 +446,12 @@ with tab1:
         default_defaults = {'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 'tc-2': 1.6, 'tc-3': 0.5, 'tvc': 8.1, 'S2': 41.1}
         
         for i, feat in enumerate(tc_features):
-            curr_val = st.session_state.active_pulldown_form.get(feat, 0.0) or default_defaults.get(feat, 0.0)
+            # Prioritize extracted session state values over default placeholders
+            if feat in st.session_state.active_pulldown_form:
+                curr_val = st.session_state.active_pulldown_form[feat]
+            else:
+                curr_val = default_defaults.get(feat, 0.0)
+                
             val = u_cols[i].number_input(f"{feat}:", value=curr_val, key=f"sim_inp_{p_key}_{c_key}_{feat}")
             new_pulldown_input.append(val)
             

@@ -48,12 +48,6 @@ def save_memory(data):
 # 2. STATE INITIALIZATION ON STARTUP
 # =================================================================
 # --- Initialize Session States ---
-
-if "last_uploaded_sim_file" not in st.session_state:
-    st.session_state.last_uploaded_sim_file = None
-
-if "sim_ver" not in st.session_state:
-    st.session_state.sim_ver = 0
 if "db" not in st.session_state:
     st.session_state.db = load_memory_from_disk()
 
@@ -449,16 +443,12 @@ with tab1:
         # ================= STEP 1: AUTOMATED SIMULATOR PARSER =================
         st.markdown("#### Step 1: Input Current Pulldown Telemetry Vector")
         sim_pulldown_file = st.file_uploader(
-            f"Auto-fill fields from local Pulldown Report ({sim_p_ambient})",
-            type=["xlsx", "xls"],
-            key=f"sim_file_upload_{p_key}_{c_key}"
-            )
-        # ← ADD THESE LINES HERE
-        if sim_pulldown_file is None:
-            st.session_state.last_uploaded_sim_file = None
-            if sim_pulldown_file is not None:
-                if st.session_state.last_uploaded_sim_file != sim_pulldown_file.name:
-                    try:
+            f"Auto-fill fields from local Pulldown Report ({sim_p_ambient})", 
+            type=["xlsx", "xls"], key=f"sim_file_upload_{p_key}_{c_key}"
+        )
+
+        if sim_pulldown_file and sim_pulldown_file != st.session_state.last_uploaded_sim_file:
+            try:
                 # Read first available sheet dynamically
                 df_sim_p = pd.read_excel(sim_pulldown_file, sheet_name=0, header=None)
                 df_sim_p[0] = df_sim_p[0].astype(str).apply(normalize_sensor_name)
@@ -489,7 +479,7 @@ with tab1:
                 elif 'tvc' in sheet_data:
                     st.session_state.active_pulldown_form['tvc'] = sheet_data['tvc']
 
-                st.session_state.last_uploaded_sim_file = sim_pulldown_file.name
+                st.session_state.last_uploaded_sim_file = sim_pulldown_file
                 # Increment key version to instantly clear old component cache and force update UI inputs
                 st.session_state.sim_ver += 1
                 st.toast("🟢 Parsed values pulled from sheet!", icon="📊")
@@ -518,6 +508,7 @@ with tab1:
             
         # 🟢 FIX: Moved outside the 'for' loop so it only prints a single clean separator line
         st.markdown("---")
+        
 # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
         

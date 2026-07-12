@@ -101,42 +101,57 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
         predicted_modes = []
         all_flags = set()
         for record in volume_records:
-            for flag in record['cpt_data'].keys():
-                all_flags.add(flag)
+            if 'cpt_data' in record and isinstance(record['cpt_data'], dict):
+                for flag in record['cpt_data'].keys():
+                    all_flags.add(flag)
                 
         for flag in sorted(all_flags):
             X_train = []
             y_train = []
 
             for record in volume_records:
-                if flag not in record["cpt_data"]:
+                if 'cpt_data' not in record or flag not in record["cpt_data"]:
                     continue
 
+                # Cleanly parse pulldown features, fallback to 0.0 if NaN or None occurs
+                def clean_val(v):
+                    if v is None or pd.isna(v):
+                        return 0.0
+                    try:
+                        return float(v)
+                    except (ValueError, TypeError):
+                        return 0.0
+
                 p_base = (
-                    [record["pulldown_data"].get(f, 0.0) for f in tc_features]
-                    + [record["pulldown_baseline_sensor"]]
+                    [clean_val(record["pulldown_data"].get(f, 0.0)) for f in tc_features]
+                    + [clean_val(record.get("pulldown_baseline_sensor", 0.0))]
                 )
 
                 outputs = record["cpt_data"][flag]
                 
-                # FIXED: Kept inside the record loop to correctly pair every record's inputs/outputs
                 y_vector = (
-                    [outputs.get(f, 0.0) for f in tc_features]
+                    [clean_val(outputs.get(f, 0.0)) for f in tc_features]
                     + [
-                        outputs.get("S2", 0.0),
-                        outputs.get("Sensor", 0.0)
+                        clean_val(outputs.get("S2", 0.0)),
+                        clean_val(outputs.get("Sensor", 0.0))
                     ]
                 )
 
                 X_train.append(p_base)
                 y_train.append(y_vector)
 
-            # FIXED: Kept inside the flag loop so it runs for every single TestFlag
             if len(X_train) >= 1:
-                knn = KNeighborsRegressor(n_neighbors=min(2, len(X_train)), weights='distance')
-                knn.fit(X_train, y_train)
+                # Double check to ensure absolutely zero NaN values make it to sklearn arrays
+                X_arr = np.nan_to_num(np.array(X_train, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+                y_arr = np.nan_to_num(np.array(y_train, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
                 
-                query_vector = np.array(new_pulldown + [target_s]).reshape(1, -1)
+                # Sanitize new query vector as well
+                clean_query = [clean_val(v) for v in new_pulldown] + [clean_val(target_s)]
+                query_vector = np.nan_to_num(np.array(clean_query, dtype=np.float64).reshape(1, -1), nan=0.0)
+                
+                knn = KNeighborsRegressor(n_neighbors=min(2, len(X_arr)), weights='distance')
+                knn.fit(X_arr, y_arr)
+                
                 prediction = knn.predict(query_vector)[0]
                 
                 row = {
@@ -153,11 +168,11 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
                     "S2": round(prediction[9], 2),
                     "Sensor": round(prediction[10], 2)
                 }
-                # FIXED: Appended rows to your results pool
                 predicted_modes.append(row)
-                    
+                
         if predicted_modes:
-            results_map[f"Target Sensor Set {idx+1} ({target_s}°C)"] = pd.DataFrame(predicted_modes)
+            key_title = f"🎯 Simulation Run Profile (Query Target Sensor: {target_s}°C)"
+            results_map[key_title] = pd.DataFrame(predicted_modes)
             
     return results_map
 

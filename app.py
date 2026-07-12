@@ -485,7 +485,7 @@ with tab1:
         default_defaults = {'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 'tc-2': 1.6, 'tc-3': 0.5, 'tvc': 8.1, 'S2': 41.1}
         
         for i, feat in enumerate(tc_features):
-            # Prioritize extracted file data if available, otherwise use defaults
+# Prioritize extracted file data if available, otherwise use defaults
             if feat in st.session_state.active_pulldown_form:
                 curr_val = st.session_state.active_pulldown_form[feat]
             else:
@@ -498,7 +498,10 @@ with tab1:
                 key=f"sim_inp_{p_key}_{c_key}_{feat}_v{st.session_state.sim_ver}"
             )
             new_pulldown_input.append(val)
-            st.markdown("---")
+            
+        # 🟢 FIX: Moved outside the 'for' loop so it only prints a single clean separator line
+        st.markdown("---")
+        
         # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
         num_targets = st.number_input("Number of target sensor points (1 to 7):", min_value=1, max_value=7, value=3, step=1)

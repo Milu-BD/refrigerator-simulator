@@ -440,61 +440,75 @@ with tab1:
     if not vol_records:
         st.warning(f"⚠️ No matching profiles found under arrangement **{selected_arrangement}** for **Pulldown: {sim_p_ambient}** linked to **CPT: {sim_c_ambient}**.")
     else:
-# ================= STEP 1: AUTOMATED SIMULATOR PARSER =================
+        # ================= STEP 1: AUTOMATED SIMULATOR PARSER =================
         st.markdown("#### Step 1: Input Current Pulldown Telemetry Vector")
         sim_pulldown_file = st.file_uploader(
             f"Auto-fill fields from local Pulldown Report ({sim_p_ambient})", 
             type=["xlsx", "xls"], key=f"sim_file_upload_{p_key}_{c_key}"
         )
 
-        # 🟢 REPLACE FROM HERE DOWNWARDS TO SAFETY CHECK EXPLICITLY AGAINST NONE
-        if sim_pulldown_file is not None:
-            if sim_pulldown_file != st.session_state.last_uploaded_sim_file:
-                try:
-                    # Read first available sheet dynamically
-                    df_sim_p = pd.read_excel(sim_pulldown_file, sheet_name=0, header=None)
-                    df_sim_p[0] = df_sim_p[0].astype(str).apply(normalize_sensor_name)
-                    
-                    sheet_data = {}
-                    for _, row in df_sim_p.dropna(subset=[0]).iterrows():
-                        lbl = row[0]
-                        if lbl not in sheet_data:
-                            try:
-                                sheet_data[lbl] = float(row[1])
-                            except (ValueError, TypeError):
-                                continue
+        if sim_pulldown_file and sim_pulldown_file != st.session_state.last_uploaded_sim_file:
+            try:
+                # Read first available sheet dynamically
+                df_sim_p = pd.read_excel(sim_pulldown_file, sheet_name=0, header=None)
+                df_sim_p[0] = df_sim_p[0].astype(str).apply(normalize_sensor_name)
+                
+                sheet_data = {}
+                for _, row in df_sim_p.dropna(subset=[0]).iterrows():
+                    lbl = row[0]
+                    if lbl not in sheet_data:
+                        try:
+                            sheet_data[lbl] = float(row[1])
+                        except (ValueError, TypeError):
+                            continue
 
-                    mapping_keys = {
-                        'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
-                        'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'S2':'s2'
-                    }
-                    
-                    # Extract individual thermocouple cells
-                    for feat, normalized_label in mapping_keys.items():
-                        if normalized_label in sheet_data:
-                            st.session_state.active_pulldown_form[feat] = sheet_data[normalized_label]
-                            
-                    # Compute average for tvc from subcomponents if available
-                    tvc_values = [sheet_data[lbl] for lbl in ['tvc1', 'tvc2', 'tvc3'] if lbl in sheet_data]
-                    if tvc_values:
-                        st.session_state.active_pulldown_form['tvc'] = round(sum(tvc_values) / len(tvc_values), 4)
-                    elif 'tvc' in sheet_data:
-                        st.session_state.active_pulldown_form['tvc'] = sheet_data['tvc']
+                mapping_keys = {
+                    'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
+                    'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'S2':'s2'
+                }
+                
+                # Extract individual thermocouple cells
+                for feat, normalized_label in mapping_keys.items():
+                    if normalized_label in sheet_data:
+                        st.session_state.active_pulldown_form[feat] = sheet_data[normalized_label]
+                        
+                # Compute average for tvc from subcomponents if available
+                tvc_values = [sheet_data[lbl] for lbl in ['tvc1', 'tvc2', 'tvc3'] if lbl in sheet_data]
+                if tvc_values:
+                    st.session_state.active_pulldown_form['tvc'] = round(sum(tvc_values) / len(tvc_values), 4)
+                elif 'tvc' in sheet_data:
+                    st.session_state.active_pulldown_form['tvc'] = sheet_data['tvc']
 
-                    st.session_state.last_uploaded_sim_file = sim_pulldown_file
-                    # Increment key version to instantly clear old component cache and force update UI inputs
-                    st.session_state.sim_ver += 1
-                    st.toast("🟢 Parsed values pulled from sheet!", icon="📊")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error parsing configuration: {str(e)}")
-        else:
-            # 🟢 Clear tracking state safely if the user crosses out the file
-            if st.session_state.last_uploaded_sim_file is not None:
-                st.session_state.last_uploaded_sim_file = None
-                st.session_state.active_pulldown_form = {}
+                st.session_state.last_uploaded_sim_file = sim_pulldown_file
+                # Increment key version to instantly clear old component cache and force update UI inputs
                 st.session_state.sim_ver += 1
+                st.toast("🟢 Parsed values pulled from sheet!", icon="📊")
                 st.rerun()
+            except Exception as e:
+                st.error(f"Error parsing configuration: {str(e)}")
+
+        u_cols = st.columns(10)
+        new_pulldown_input = []
+        default_defaults = {'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 'tc-2': 1.6, 'tc-3': 0.5, 'tvc': 8.1, 'S2': 41.1}
+        
+        for i, feat in enumerate(tc_features):
+# Prioritize extracted file data if available, otherwise use defaults
+            if feat in st.session_state.active_pulldown_form:
+                curr_val = st.session_state.active_pulldown_form[feat]
+            else:
+                curr_val = default_defaults.get(feat, 0.0)
+                
+            # Bound dynamic widget version to key parameters to force a redraw when new files parse
+            val = u_cols[i].number_input(
+                f"{feat}:", 
+                value=curr_val, 
+                key=f"sim_inp_{p_key}_{c_key}_{feat}_v{st.session_state.sim_ver}"
+            )
+            new_pulldown_input.append(val)
+            
+        # 🟢 FIX: Moved outside the 'for' loop so it only prints a single clean separator line
+        st.markdown("---")
+        
 # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
         
@@ -551,8 +565,7 @@ with tab2:
             key=f"r_cpt_file_{p_repo_key}_{c_repo_key}_v_{st.session_state.cpt_file_key}"
         )
         
-# 🟢 Change the line to look exactly like this:
-    if repo_pulldown_file is not None and repo_cpt_file is not None:
+    if repo_pulldown_file and repo_cpt_file:
         if st.button("💾 Process and Train Simulator Memory Buffer", type="primary"):
             try:
                 # 1. PARSE PULLDOWN DATA

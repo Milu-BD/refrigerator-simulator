@@ -497,7 +497,7 @@ with tab1:
                 value=curr_val, 
                 key=f"sim_inp_{p_key}_{c_key}_{feat}_v{st.session_state.sim_ver}"
             )
-            new_pulldown_input.append(val)
+
         # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
         num_targets = st.number_input("Number of target sensor points (1 to 7):", min_value=1, max_value=7, value=3, step=1)

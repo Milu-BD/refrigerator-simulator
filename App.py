@@ -6,7 +6,7 @@ from sklearn.neighbors import KNeighborsRegressor
 import streamlit as st
 import copy
 
-# Initialize session state variables
+# 🟢 Add this block near the top of app.py to initialize session state variables
 if "p_file_key" not in st.session_state:
     st.session_state.p_file_key = 0
 
@@ -54,6 +54,7 @@ if "db" not in st.session_state:
 if 'reviewer_logged_in' not in st.session_state:
     st.session_state.reviewer_logged_in = False
 
+# 🟢 ADD THESE TWO LINES TO PREVENT THE ATTRIBUTEERROR:
 if "arr_form_id" not in st.session_state:
     st.session_state.arr_form_id = 0
 
@@ -65,7 +66,7 @@ tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', '
 metric_types = ['mean', 'min', 'max', '(max+min)/2']
 
 # =================================================================
-# 3. UTILITY HELPER FUNCTIONS
+# 3. UTILITY HELPER FUNCTIONS`
 # =================================================================
 def normalize_sensor_name(name):
     if not isinstance(name, str):
@@ -191,6 +192,124 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
 # =================================================================
 # 5. STREAMLIT USER INTERFACE (TABS) & REPOSITORY LOGIC
 # =================================================================
+    
+    # --- STEP 1: RENDER THE FILE UPLOADER FIRST ---
+    repo_cpt_file = st.file_uploader(
+    "Upload CPT Calculation Report (Excel)",
+    type=["xlsx", "xls"],
+    key="repo_cpt_file"
+    )
+    
+    # --- STEP 2: RUN STRATEGY A *ONLY* IF A FILE IS PRESENT ---
+    if repo_cpt_file is not None:
+        try:
+            import openpyxl
+
+            # 1. Open the file natively using openpyxl to check row visibility states
+            wb = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+            
+            # Target the layout sheet safely
+            if "ANALYSIS REPORT" in wb.sheetnames:
+                sheet_name = "ANALYSIS REPORT"
+            elif "CPT CALCULATION REPORT" in wb.sheetnames:
+                sheet_name = "CPT CALCULATION REPORT"
+            else:
+                sheet_name = wb.sheetnames[0]
+                ws = wb[sheet_name]
+            
+            # 2. Extract data into standard pandas format while filtering hidden rows
+            visible_rows = []
+            for r_idx, row in enumerate(ws.iter_rows(values_only=False), start=1):
+                if ws.row_dimensions[r_idx].hidden:
+                    continue
+                    
+                row_values = [cell.value for cell in row]
+                visible_rows.append(row_values)
+                
+            # 3. Convert only the visible rows into your processing DataFrame
+            df_cpt = pd.DataFrame(visible_rows)
+
+            # -------------------------------------------------------------
+            # Automatically locate the table header
+            # -------------------------------------------------------------
+            header_row = None
+
+            for i in range(len(df_cpt)):
+                row = [str(x).strip().lower() if x is not None else "" for x in df_cpt.iloc[i]]
+
+                if "data criteria" in row and ("tf1" in row or "tf-1" in row):
+                    header_row = i
+                    break
+
+            if header_row is None:
+                raise Exception("Unable to locate the CPT table header.")
+
+            headers = df_cpt.iloc[header_row].tolist()
+
+            df_cpt = df_cpt.iloc[header_row + 1:].reset_index(drop=True)
+
+            df_cpt.columns = headers
+
+            df_cpt.dropna(subset=["Data Criteria"], inplace=True)
+
+            current_flag = "Unknown"
+
+            for _, r in df_cpt.iterrows():
+
+                val_f1 = str(r.iloc[0]).strip()
+                val_crit = str(r.iloc[1]).strip().lower()
+
+                # Forward-fill Test Flag
+                if val_f1 and val_f1 != "nan" and val_f1 != current_flag:
+                    current_flag = val_f1
+
+                if current_flag not in cpt_structured:
+                    cpt_structured[current_flag] = {}
+
+                if val_crit in metric_types:
+
+                    # S2 → Mean only
+                    if val_crit == "mean":
+                        s2_value = to_float(r.iloc[19])
+                    else:
+                        s2_value = 0.0
+
+                    # Sensor → Min only
+                    if val_crit == "min":
+                        sensor_value = to_float(r.iloc[17])
+                    else:
+                        sensor_value = 0.0
+
+                    cpt_structured[current_flag][val_crit] = {
+
+                        "tf-1": to_float(r.iloc[2]),
+                        "tf-2": to_float(r.iloc[3]),
+                        "tf-3": to_float(r.iloc[4]),
+                        "tf-4": to_float(r.iloc[5]),
+                        "tf-5": to_float(r.iloc[6]),
+
+                        "tc-1": to_float(r.iloc[12]),
+                        "tc-2": to_float(r.iloc[13]),
+                        "tc-3": to_float(r.iloc[14]),
+
+                        "tvc": to_float(r.iloc[16]),
+
+                        "S2": s2_value,
+
+                        "Sensor": sensor_value
+                    }
+
+            if cpt_structured:
+                parsed_successfully = True
+                st.success("✅ Excel data parsed successfully using Strategy A!")
+
+        except Exception as e: 
+            st.error(f"Debug Info Strategy A Error: {str(e)}")
+            
+    else:
+        # If no file is loaded, show info and block processing downward execution errors
+        st.info("💡 Please upload an Excel sheet to parse data coordinates.")
+
 
 # ================= SIDEBAR: PROFILE & ARRANGEMENT MANAGER =================
 st.sidebar.header("📁 Volume Profile Manager")
@@ -373,7 +492,7 @@ with tab1:
         default_defaults = {'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 'tc-2': 1.6, 'tc-3': 0.5, 'tvc': 8.1, 'S2': 41.1}
         
         for i, feat in enumerate(tc_features):
-            # Prioritize extracted file data if available, otherwise use defaults
+# Prioritize extracted file data if available, otherwise use defaults
             if feat in st.session_state.active_pulldown_form:
                 curr_val = st.session_state.active_pulldown_form[feat]
             else:
@@ -387,11 +506,13 @@ with tab1:
             )
             new_pulldown_input.append(val)
             
+        # 🟢 FIX: Moved outside the 'for' loop so it only prints a single clean separator line
         st.markdown("---")
         
-        # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
+# ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
         
+        # 🟢 CHANGED: Set value=5 so it defaults to 5 sensor fields automatically on startup
         num_targets = st.number_input("Number of target sensor points (1 to 7):", min_value=1, max_value=7, value=5, step=1)
         
         target_sensors = []

@@ -19,28 +19,35 @@ st.set_page_config(page_title="Refrigerator Simulator Hub", layout="wide")
 # =================================================================
 # 1. HARD DISK PERSISTENCE LAYER
 # =================================================================
-STORAGE_FILE = "simulator_storage.json"
+from supabase import create_client
+
 REVIEWER_PASSWORD = "Admin@Cooling2026"
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+
+@st.cache_resource
+def get_supabase_client():
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = get_supabase_client()
 
 def load_memory_from_disk():
-    """Reads saved database matrix from local disk storage on startup."""
-    if os.path.exists(STORAGE_FILE):
-        try:
-            with open(STORAGE_FILE, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            st.error(f"⚠️ Error loading backup database file: {str(e)}")
+    """Reads the saved database matrix from Supabase on startup."""
+    try:
+        res = supabase.table("app_storage").select("data").eq("id", "main_db").execute()
+        if res.data:
+            return res.data[0]["data"]
+    except Exception as e:
+        st.error(f"⚠️ Error loading backup database: {str(e)}")
     return {}
 
 def save_memory_to_disk(db_matrix):
-    """Writes the current database matrix to local disk storage instantly."""
+    """Writes the current database matrix to Supabase instantly."""
     try:
-        with open(STORAGE_FILE, "w") as f:
-            json.dump(db_matrix, f, indent=4)
+        supabase.table("app_storage").upsert({"id": "main_db", "data": db_matrix}).execute()
     except Exception as e:
-        st.error(f"⚠️ Failed to write backup data to disk: {str(e)}")
+        st.error(f"⚠️ Failed to save backup data: {str(e)}")
 
-# Legacy compatibility wrapper in case it's explicitly called later in your file
 def save_memory(data):
     save_memory_to_disk(data)
 

@@ -1,7 +1,9 @@
 import json
 import os
+import base64
 import numpy as np
 import pandas as pd
+import requests
 from sklearn.neighbors import KNeighborsRegressor
 import streamlit as st
 import copy
@@ -17,37 +19,80 @@ if "cpt_file_key" not in st.session_state:
 st.set_page_config(page_title="Refrigerator Simulator Hub", layout="wide")
 
 # =================================================================
-# 1. HARD DISK PERSISTENCE LAYER
+# 1. GITHUB-BACKED PERSISTENCE LAYER
 # =================================================================
-from supabase import create_client
-
+# Local disk on Streamlit Cloud is wiped on every reboot/redeploy, so the
+# database matrix is instead stored as a JSON file committed directly to
+# your GitHub repo via the Contents API. Requires a [github] block in
+# Streamlit secrets: token, repo ("user/repo"), and optionally branch.
 REVIEWER_PASSWORD = "Admin@Cooling2026"
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
-@st.cache_resource
-def get_supabase_client():
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+GITHUB_FILE_PATH = "simulator_storage.json"
 
-supabase = get_supabase_client()
+def _github_config_ok():
+    return "github" in st.secrets and "token" in st.secrets["github"] and "repo" in st.secrets["github"]
+
+def _github_api_url():
+    repo = st.secrets["github"]["repo"]
+    return f"https://api.github.com/repos/{repo}/contents/{GITHUB_FILE_PATH}"
+
+def _github_headers():
+    token = st.secrets["github"]["token"]
+    return {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
 
 def load_memory_from_disk():
-    """Reads the saved database matrix from Supabase on startup."""
+    """Reads the saved database matrix from the GitHub repo on startup."""
+    if not _github_config_ok():
+        st.error("⚠️ GitHub storage isn't configured. Add a [github] block (token, repo) to Streamlit secrets.")
+        return {}
     try:
-        res = supabase.table("app_storage").select("data").eq("id", "main_db").execute()
-        if res.data:
-            return res.data[0]["data"]
+        branch = st.secrets["github"].get("branch", "main")
+        resp = requests.get(_github_api_url(), headers=_github_headers(), params={"ref": branch}, timeout=15)
+        if resp.status_code == 200:
+            content = resp.json()
+            decoded = base64.b64decode(content["content"]).decode("utf-8")
+            return json.loads(decoded) if decoded.strip() else {}
+        elif resp.status_code == 404:
+            # No file yet — first run. It will be created on first save.
+            return {}
+        else:
+            st.error(f"⚠️ GitHub load error ({resp.status_code}): {resp.text}")
+            return {}
     except Exception as e:
-        st.error(f"⚠️ Error loading backup database: {str(e)}")
-    return {}
+        st.error(f"⚠️ Error loading backup database file from GitHub: {str(e)}")
+        return {}
 
 def save_memory_to_disk(db_matrix):
-    """Writes the current database matrix to Supabase instantly."""
+    """Commits the current database matrix to the GitHub repo instantly."""
+    if not _github_config_ok():
+        st.error("⚠️ GitHub storage isn't configured. Add a [github] block (token, repo) to Streamlit secrets.")
+        return
     try:
-        supabase.table("app_storage").upsert({"id": "main_db", "data": db_matrix}).execute()
-    except Exception as e:
-        st.error(f"⚠️ Failed to save backup data: {str(e)}")
+        branch = st.secrets["github"].get("branch", "main")
+        headers = _github_headers()
 
+        # Need the current file's SHA to update it (GitHub requires this for existing files)
+        get_resp = requests.get(_github_api_url(), headers=headers, params={"ref": branch}, timeout=15)
+        sha = get_resp.json().get("sha") if get_resp.status_code == 200 else None
+
+        content_str = json.dumps(db_matrix, indent=4)
+        encoded_content = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
+
+        payload = {
+            "message": "Update simulator storage data",
+            "content": encoded_content,
+            "branch": branch,
+        }
+        if sha:
+            payload["sha"] = sha
+
+        put_resp = requests.put(_github_api_url(), headers=headers, json=payload, timeout=15)
+        if put_resp.status_code not in (200, 201):
+            st.error(f"⚠️ Failed to write backup data to GitHub ({put_resp.status_code}): {put_resp.text}")
+    except Exception as e:
+        st.error(f"⚠️ Failed to write backup data to GitHub: {str(e)}")
+
+# Legacy compatibility wrapper in case it's explicitly called later in your file
 def save_memory(data):
     save_memory_to_disk(data)
 

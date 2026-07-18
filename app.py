@@ -115,6 +115,7 @@ if "model_form_id" not in st.session_state:
 # Global configuration constants
 tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', 'tvc', 'S2']
 metric_types = ['mean', 'min', 'max', '(max+min)/2']
+metric_labels = {'mean': 'Mean', 'min': 'Min', 'max': 'Max', '(max+min)/2': '(Max+Min)/2'}
 
 # =================================================================
 # 3. UTILITY HELPER FUNCTIONS
@@ -184,89 +185,101 @@ def verify_db_structure(vol, arr_name, p_amb, c_amb):
 # =================================================================
 def run_automated_simulation(volume_records, new_pulldown, target_sensors):
     """
-    Generates a consolidated prediction dataframe where each row represents one 
-    distinct Sensor Query Point by evaluating how past levels correspond to target conditions.
+    Generates a consolidated prediction dataframe where each Sensor Query Point produces
+    4 rows — Mean, Min, Max, (Max+Min)/2 — each predicted from that criteria's historical
+    data. S2 is only meaningful on the Mean row (it was only ever recorded there).
     """
     if not volume_records:
         return pd.DataFrame()
-        
+
+    def clean_val(v):
+        if v is None or pd.isna(v):
+            return 0.0
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return 0.0
+
+    base_fields = ["tf-1", "tf-2", "tf-3", "tf-4", "tf-5", "tc-1", "tc-2", "tc-3", "tvc"]
+
     predicted_rows = []
-    
-    # Process each user manual query point as an independent prediction row
-    for idx, target_s in enumerate(target_sensors):
-        X_train = []
-        y_train = []
 
-        def clean_val(v):
-            if v is None or pd.isna(v):
-                return 0.0
-            try:
-                return float(v)
-            except (ValueError, TypeError):
-                return 0.0
+    # Process each user manual query point, once per criteria (Mean/Min/Max/(Max+Min)/2)
+    for target_s in target_sensors:
+        for metric_key in metric_types:
+            X_train = []
+            y_train = []
 
-        for record in volume_records:
-            if 'cpt_data' not in record or not record['cpt_data']:
-                continue
+            for record in volume_records:
+                if 'cpt_data' not in record or not record['cpt_data']:
+                    continue
 
-            # Pulldown base features
-            p_features = [clean_val(record["pulldown_data"].get(f, 0.0)) for f in tc_features]
-            p_baseline = clean_val(record.get("pulldown_baseline_sensor", 0.0))
+                # Pulldown base features (unchanged — pulldown telemetry is still one flat vector)
+                p_features = [clean_val(record["pulldown_data"].get(f, 0.0)) for f in tc_features]
+                p_baseline = clean_val(record.get("pulldown_baseline_sensor", 0.0))
 
-            # Treat each flag/level as a distinct data point to capture variance across sensor points
-            for flag, level_data in record["cpt_data"].items():
-                # Extract historical sensor cut-out temperature for this level block
-                hist_sensor = clean_val(level_data.get("Sensor", level_data.get("sensor", 0.0)))
-                
-                # If Sensor value is missing or zero, use a default fallback matching common levels
-                if hist_sensor == 0.0:
-                    if "1" in flag: hist_sensor = -27.5
-                    elif "2" in flag: hist_sensor = -27.0
-                    elif "3" in flag: hist_sensor = -25.5
-                    elif "4" in flag: hist_sensor = -24.0
-                    elif "5" in flag: hist_sensor = -21.0
+                # Treat each flag/level as a distinct data point to capture variance across sensor points
+                for flag, level_data in record["cpt_data"].items():
+                    metric_data = level_data.get(metric_key) if isinstance(level_data, dict) else None
+                    if not metric_data:
+                        continue
 
-                # Formulate training input: Pulldown context matrix + specific level's target sensor value
-                train_input = p_features + [p_baseline, hist_sensor]
-                
-                # Target output values to be predicted
-                train_target = [clean_val(level_data.get(f, 0.0)) for f in tc_features] + [clean_val(level_data.get("S2", 0.0))]
+                    # Extract historical sensor cut-out temperature for this level block (flag-level, from the Min row)
+                    hist_sensor = clean_val(level_data.get("Sensor", level_data.get("sensor", 0.0)))
 
-                X_train.append(train_input)
-                y_train.append(train_target)
+                    # If Sensor value is missing or zero, use a default fallback matching common levels
+                    if hist_sensor == 0.0:
+                        if "1" in flag: hist_sensor = -27.5
+                        elif "2" in flag: hist_sensor = -27.0
+                        elif "3" in flag: hist_sensor = -25.5
+                        elif "4" in flag: hist_sensor = -24.0
+                        elif "5" in flag: hist_sensor = -21.0
 
-        if len(X_train) >= 1:
-            X_arr = np.nan_to_num(np.array(X_train, dtype=np.float64), nan=0.0)
-            y_arr = np.nan_to_num(np.array(y_train, dtype=np.float64), nan=0.0)
-            
-            # Construct active query: current telemetry + the specific target query sensor step
-            current_baseline = clean_val(new_pulldown[-1]) if len(new_pulldown) == 10 else 35.0
-            query_vector = np.nan_to_num(
-                np.array([clean_val(v) for v in new_pulldown] + [current_baseline, clean_val(target_s)], dtype=np.float64).reshape(1, -1), 
-                nan=0.0
-            )
-            
-            # Run distance-weighted interpolation to compute dynamic shift across query points
-            knn = KNeighborsRegressor(n_neighbors=min(3, len(X_arr)), weights='distance')
-            knn.fit(X_arr, y_arr)
-            
-            prediction = knn.predict(query_vector)[0]
-            
-            row = {
-                "Sensor Value": f"{target_s} °C",
-                "tf-1": round(prediction[0], 2),
-                "tf-2": round(prediction[1], 2),
-                "tf-3": round(prediction[2], 2),
-                "tf-4": round(prediction[3], 2),
-                "tf-5": round(prediction[4], 2),
-                "tc-1": round(prediction[5], 2),
-                "tc-2": round(prediction[6], 2),
-                "tc-3": round(prediction[7], 2),
-                "tvc": round(prediction[8], 2),
-                "S2": round(prediction[9], 2)
-            }
-            predicted_rows.append(row)
-            
+                    # Formulate training input: Pulldown context matrix + specific level's target sensor value
+                    train_input = p_features + [p_baseline, hist_sensor]
+
+                    # Target output values to be predicted for this criteria (tf-1..5, tc-1..3, tvc)
+                    train_target = [clean_val(metric_data.get(f, 0.0)) for f in base_fields]
+                    # S2 was only ever recorded on the Mean row, so only train/predict it there
+                    if metric_key == "mean":
+                        train_target = train_target + [clean_val(level_data.get("S2", 0.0))]
+
+                    X_train.append(train_input)
+                    y_train.append(train_target)
+
+            if len(X_train) >= 1:
+                X_arr = np.nan_to_num(np.array(X_train, dtype=np.float64), nan=0.0)
+                y_arr = np.nan_to_num(np.array(y_train, dtype=np.float64), nan=0.0)
+
+                # Construct active query: current telemetry + the specific target query sensor step
+                current_baseline = clean_val(new_pulldown[-1]) if len(new_pulldown) == 10 else 35.0
+                query_vector = np.nan_to_num(
+                    np.array([clean_val(v) for v in new_pulldown] + [current_baseline, clean_val(target_s)], dtype=np.float64).reshape(1, -1),
+                    nan=0.0
+                )
+
+                # Run distance-weighted interpolation to compute dynamic shift across query points
+                knn = KNeighborsRegressor(n_neighbors=min(3, len(X_arr)), weights='distance')
+                knn.fit(X_arr, y_arr)
+
+                prediction = knn.predict(query_vector)[0]
+
+                row = {
+                    "Sensor Value": f"{target_s} °C",
+                    "Metric": metric_labels[metric_key],
+                    "tf-1": round(prediction[0], 2),
+                    "tf-2": round(prediction[1], 2),
+                    "tf-3": round(prediction[2], 2),
+                    "tf-4": round(prediction[3], 2),
+                    "tf-5": round(prediction[4], 2),
+                    "tc-1": round(prediction[5], 2),
+                    "tc-2": round(prediction[6], 2),
+                    "tc-3": round(prediction[7], 2),
+                    "tvc": round(prediction[8], 2),
+                    "S2": round(prediction[9], 2) if metric_key == "mean" else np.nan
+                }
+                predicted_rows.append(row)
+
     if predicted_rows:
         return pd.DataFrame(predicted_rows)
     return pd.DataFrame()
@@ -633,13 +646,17 @@ with tab2:
 
                         if "level" in colA.lower() or "boost" in colA.lower():
                             current_flag = colA
+                            if current_flag not in cpt_structured:
+                                cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0}
 
                         if current_flag is None:
                             continue
+                        if current_flag not in cpt_structured:
+                            cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0}
 
-                        # Read strictly from mapped unhidden cells
-                        if colB == "mean":
-                            cpt_structured[current_flag] = {
+                        # Read strictly from mapped unhidden cells, one sub-block per criteria row
+                        if colB in metric_types:
+                            cpt_structured[current_flag][colB] = {
                                 "tf-1": safe_float(get_visible_value(data_row, 3)),
                                 "tf-2": safe_float(get_visible_value(data_row, 4)),
                                 "tf-3": safe_float(get_visible_value(data_row, 5)),
@@ -649,11 +666,11 @@ with tab2:
                                 "tc-2": safe_float(get_visible_value(data_row, 14)),
                                 "tc-3": safe_float(get_visible_value(data_row, 15)),
                                 "tvc": safe_float(get_visible_value(data_row, 17)),
-                                "S2": safe_float(get_visible_value(data_row, 21)),
-                                "Sensor": 0.0
                             }
-                        elif colB == "min":
-                            if current_flag in cpt_structured:
+                            # S2 is only meaningful on the Mean row; Sensor only on the Min row
+                            if colB == "mean":
+                                cpt_structured[current_flag]["S2"] = safe_float(get_visible_value(data_row, 21))
+                            elif colB == "min":
                                 cpt_structured[current_flag]["Sensor"] = safe_float(get_visible_value(data_row, 19))
 
                     if cpt_structured:
@@ -688,26 +705,32 @@ with tab2:
                                 val_crit = str(row.get("datacriteria", "")).strip().lower()
                                 
                                 if val_f1 and val_f1 != "nan" and val_f1 != current_flag: current_flag = val_f1
-                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {}
+                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0}
                                     
                                 try: rt_val = float(row.get("runtime_pct", 0.0))
                                 except (ValueError, TypeError): rt_val = 0.0
                                     
                                 if rt_val == 100: continue
-                                    
-                                if val_crit in ["mean", "avg", "average"]:
-                                    cpt_structured[current_flag] = {
+
+                                metric_map = {"mean": "mean", "avg": "mean", "average": "mean",
+                                               "min": "min", "max": "max", "(max+min)/2": "(max+min)/2"}
+                                metric_key = metric_map.get(val_crit)
+                                if metric_key:
+                                    cpt_structured[current_flag][metric_key] = {
                                         "tf-1": float(row.get("tf1", 0.0)), "tf-2": float(row.get("tf2", 0.0)),
                                         "tf-3": float(row.get("tf3", 0.0)), "tf-4": float(row.get("tf4", 0.0)),
                                         "tf-5": float(row.get("tf5", 0.0)), "tc-1": float(row.get("tc1", 0.0)),
                                         "tc-2": float(row.get("tc2", 0.0)), "tc-3": float(row.get("tc3", 0.0)),
-                                        "tvc":  float(row.get("vc", 0.0)),  "S2":   float(row.get("s2", 0.0)),
-                                        "Sensor": float(row.get("sensor", 0.0))
+                                        "tvc":  float(row.get("vc", 0.0)),
                                     }
+                                    if metric_key == "mean":
+                                        cpt_structured[current_flag]["S2"] = float(row.get("s2", 0.0))
+                                    elif metric_key == "min":
+                                        cpt_structured[current_flag]["Sensor"] = float(row.get("sensor", 0.0))
                             if cpt_structured: parsed_successfully = True
                     except Exception: pass
 
-                # --- STRATEGY C: Section Layout Matrix Format ---
+                # --- STRATEGY C: Section Layout Matrix Format (Mean values only — this layout has no separate Min/Max/Avg rows) ---
                 if not parsed_successfully:
                     try:
                         df_cpt_seg = pd.read_excel(repo_cpt_file, sheet_name=0, header=None)
@@ -716,28 +739,31 @@ with tab2:
                             val_0 = str(r.iloc[0]).strip()
                             if pd.notna(r.iloc[0]) and ("level" in val_0.lower() or "boost" in val_0.lower()):
                                 current_flag = val_0
-                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {}
+                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0, "mean": {}}
                                 continue
                             if val_0.lower() in ["section", "min", "nan", ""] or pd.isna(r.iloc[0]): continue
                             clean_tag = normalize_sensor_name(val_0)
                             
                             if current_flag != "Unknown":
+                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0, "mean": {}}
                                 if clean_tag == "sensor":
                                     try: cpt_structured[current_flag]["Sensor"] = float(r.iloc[5])
                                     except (ValueError, TypeError, IndexError): cpt_structured[current_flag]["Sensor"] = float(r.iloc[1])
+                                elif clean_tag == "s2":
+                                    cpt_structured[current_flag]["S2"] = float(r.iloc[8])
                                 else:
                                     mapping_dict = {
                                         "tf1": "tf-1", "tf2": "tf-2", "tf3": "tf-3", "tf4": "tf-4", "tf5": "tf-5",
-                                        "tc1": "tc-1", "tc2": "tc-2", "tc3": "tc-3", "s2": "S2"
+                                        "tc1": "tc-1", "tc2": "tc-2", "tc3": "tc-3"
                                     }
-                                    if clean_tag in mapping_dict: cpt_structured[current_flag][mapping_dict[clean_tag]] = float(r.iloc[8])
+                                    if clean_tag in mapping_dict: cpt_structured[current_flag]["mean"][mapping_dict[clean_tag]] = float(r.iloc[8])
                                     elif "tvc" in clean_tag:
                                         if "tvc_vals" not in cpt_structured[current_flag]: cpt_structured[current_flag]["tvc_vals"] = []
                                         cpt_structured[current_flag]["tvc_vals"].append(float(r.iloc[8]))
 
                         for flg in cpt_structured:
                             if "tvc_vals" in cpt_structured[flg] and cpt_structured[flg]["tvc_vals"]:
-                                cpt_structured[flg]["tvc"] = round(sum(cpt_structured[flg]["tvc_vals"]) / len(cpt_structured[flg]["tvc_vals"]), 4)
+                                cpt_structured[flg]["mean"]["tvc"] = round(sum(cpt_structured[flg]["tvc_vals"]) / len(cpt_structured[flg]["tvc_vals"]), 4)
                                 del cpt_structured[flg]["tvc_vals"]
                         parsed_successfully = True
                     except Exception: pass
@@ -897,24 +923,32 @@ with tab3:
                     
                     # Section B: Display CPT Multivariable Flags Data Matrix
                     st.markdown("#### 🔹 Counted Positions for CPT Matrix")
-                    
-                    cpt_rows = []
-                    for flag_name, sensor_values in record["cpt_data"].items():
-                        row_entry = {
-                            "Test Flag": flag_name,
-                            "tf-1": sensor_values.get("tf-1", 0.0),
-                            "tf-2": sensor_values.get("tf-2", 0.0),
-                            "tf-3": sensor_values.get("tf-3", 0.0),
-                            "tf-4": sensor_values.get("tf-4", 0.0),
-                            "tf-5": sensor_values.get("tf-5", 0.0),
-                            "tc-1": sensor_values.get("tc-1", 0.0),
-                            "tc-2": sensor_values.get("tc-2", 0.0),
-                            "tc-3": sensor_values.get("tc-3", 0.0),
-                            "tvc": sensor_values.get("tvc", 0.0),
-                            "S2": sensor_values.get("S2", 0.0),
-                            "Sensor": sensor_values.get("Sensor", 0.0)
-                        }
-                        cpt_rows.append(row_entry)
+
+                    def build_cpt_rows(cpt_data_dict):
+                        rows = []
+                        for flag_name, flag_block in cpt_data_dict.items():
+                            for metric_key in metric_types:
+                                metric_data = flag_block.get(metric_key) if isinstance(flag_block, dict) else None
+                                if not metric_data:
+                                    continue
+                                rows.append({
+                                    "Test Flag": flag_name,
+                                    "Metric": metric_labels[metric_key],
+                                    "tf-1": metric_data.get("tf-1", 0.0),
+                                    "tf-2": metric_data.get("tf-2", 0.0),
+                                    "tf-3": metric_data.get("tf-3", 0.0),
+                                    "tf-4": metric_data.get("tf-4", 0.0),
+                                    "tf-5": metric_data.get("tf-5", 0.0),
+                                    "tc-1": metric_data.get("tc-1", 0.0),
+                                    "tc-2": metric_data.get("tc-2", 0.0),
+                                    "tc-3": metric_data.get("tc-3", 0.0),
+                                    "tvc": metric_data.get("tvc", 0.0),
+                                    "S2": flag_block.get("S2", 0.0) if metric_key == "mean" else np.nan,
+                                    "Sensor": flag_block.get("Sensor", 0.0) if metric_key == "min" else np.nan,
+                                })
+                        return rows
+
+                    cpt_rows = build_cpt_rows(record["cpt_data"])
 
                     if cpt_rows:
                         cpt_df = add_avg_columns(pd.DataFrame(cpt_rows))
@@ -922,29 +956,14 @@ with tab3:
                         if "original_cpt_data" not in record:
                             record["original_cpt_data"] = record["cpt_data"].copy()
 
-                        original_cpt_rows = []
-                        for flag_name, sensor_values in record["original_cpt_data"].items():
-                            original_cpt_rows.append({
-                                "Test Flag": flag_name,
-                                "tf-1": sensor_values.get("tf-1", 0.0),
-                                "tf-2": sensor_values.get("tf-2", 0.0),
-                                "tf-3": sensor_values.get("tf-3", 0.0),
-                                "tf-4": sensor_values.get("tf-4", 0.0),
-                                "tf-5": sensor_values.get("tf-5", 0.0),
-                                "tc-1": sensor_values.get("tc-1", 0.0),
-                                "tc-2": sensor_values.get("tc-2", 0.0),
-                                "tc-3": sensor_values.get("tc-3", 0.0),
-                                "tvc": sensor_values.get("tvc", 0.0),
-                                "S2": sensor_values.get("S2", 0.0),
-                                "Sensor": sensor_values.get("Sensor", 0.0)
-                            })
-                            
+                        original_cpt_rows = build_cpt_rows(record["original_cpt_data"])
                         original_cpt_df = add_avg_columns(pd.DataFrame(original_cpt_rows))
                         
                         def refresh_cpt():
                             pass
 
-                        # tf-a / tc-a are computed averages, shown but not directly editable
+                        # tf-a / tc-a are computed averages, shown but not directly editable.
+                        # Test Flag / Metric identify which of the 4 rows (Mean/Min/Max/Avg) a row belongs to.
                         edited_cpt_df = st.data_editor(
                             cpt_df,
                             use_container_width=True,
@@ -953,6 +972,8 @@ with tab3:
                             column_config={
                                 "tf-a": st.column_config.NumberColumn("tf-a", disabled=True),
                                 "tc-a": st.column_config.NumberColumn("tc-a", disabled=True),
+                                "Test Flag": st.column_config.TextColumn("Test Flag", disabled=True),
+                                "Metric": st.column_config.TextColumn("Metric", disabled=True),
                             },
                             key=f"cpt_edit_{run_idx}_v{current_ver}",
                             on_change=refresh_cpt
@@ -994,11 +1015,17 @@ with tab3:
                             # Save Pulldown Matrix (tf-a/tc-a are computed display-only fields, never stored)
                             record["pulldown_data"] = edited_p_df.drop(columns=["tf-a", "tc-a"], errors="ignore").iloc[0].to_dict()
 
-                            # Save CPT Matrix
+                            # Save CPT Matrix — reassemble the 4 rows per flag back into the nested structure
+                            label_to_key = {v: k for k, v in metric_labels.items()}
                             new_cpt = {}
                             for _, row in edited_cpt_df.iterrows():
                                 flag = row["Test Flag"]
-                                new_cpt[flag] = {
+                                metric_key = label_to_key.get(row["Metric"], str(row["Metric"]).lower())
+
+                                if flag not in new_cpt:
+                                    new_cpt[flag] = {"S2": 0.0, "Sensor": 0.0}
+
+                                new_cpt[flag][metric_key] = {
                                     "tf-1": float(row["tf-1"]),
                                     "tf-2": float(row["tf-2"]),
                                     "tf-3": float(row["tf-3"]),
@@ -1008,9 +1035,11 @@ with tab3:
                                     "tc-2": float(row["tc-2"]),
                                     "tc-3": float(row["tc-3"]),
                                     "tvc": float(row["tvc"]),
-                                    "S2": float(row["S2"]),
-                                    "Sensor": float(row["Sensor"])
                                 }
+                                if metric_key == "mean" and pd.notna(row["S2"]):
+                                    new_cpt[flag]["S2"] = float(row["S2"])
+                                if metric_key == "min" and pd.notna(row["Sensor"]):
+                                    new_cpt[flag]["Sensor"] = float(row["Sensor"])
                             record["cpt_data"] = new_cpt
 
                             # Commit file data structure changes to the physical disk 

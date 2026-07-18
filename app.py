@@ -132,6 +132,25 @@ def to_float(v):
     except:
         return 0.0
 
+# Computes tf-a (avg of tf-1..tf-5) and tc-a (avg of tc-1..tc-3) for a dict of sensor values
+def compute_avg_fields(values_dict):
+    tf_vals = [to_float(values_dict.get(f"tf-{i}", 0.0)) for i in range(1, 6)]
+    tc_vals = [to_float(values_dict.get(f"tc-{i}", 0.0)) for i in range(1, 4)]
+    tf_a = round(sum(tf_vals) / len(tf_vals), 2) if tf_vals else 0.0
+    tc_a = round(sum(tc_vals) / len(tc_vals), 2) if tc_vals else 0.0
+    return tf_a, tc_a
+
+# Adds tf-a and tc-a average columns to a single-row-per-record dataframe
+def add_avg_columns(df):
+    df = df.copy()
+    tf_cols = [c for c in ["tf-1", "tf-2", "tf-3", "tf-4", "tf-5"] if c in df.columns]
+    tc_cols = [c for c in ["tc-1", "tc-2", "tc-3"] if c in df.columns]
+    if tf_cols:
+        df["tf-a"] = df[tf_cols].apply(pd.to_numeric, errors="coerce").mean(axis=1).round(2)
+    if tc_cols:
+        df["tc-a"] = df[tc_cols].apply(pd.to_numeric, errors="coerce").mean(axis=1).round(2)
+    return df
+
 # Helper initialization to safeguard nested multi-arrangement structure
 def verify_db_structure(vol, arr_name, p_amb, c_amb):
     if vol not in st.session_state.db or not isinstance(st.session_state.db[vol], dict):
@@ -822,25 +841,32 @@ with tab3:
                     # Section A: Display Pulldown Data Summary Table
                     st.markdown("#### 🔹 Counted Pulldown Matrix")
 
-                    p_df = pd.DataFrame([record["pulldown_data"]])
+                    p_df = add_avg_columns(pd.DataFrame([record["pulldown_data"]]))
                     
                     if "original_pulldown_data" not in record:
                         record["original_pulldown_data"] = record["pulldown_data"].copy()
 
-                    original_p_df = pd.DataFrame([record["original_pulldown_data"]])
+                    original_p_df = add_avg_columns(pd.DataFrame([record["original_pulldown_data"]]))
 
                     def refresh_pulldown():
                         pass
 
                     # Key dynamically alters based on the current save version string
+                    # tf-a / tc-a are computed averages, shown but not directly editable
                     edited_p_df = st.data_editor(
                         p_df,
                         use_container_width=True,
                         hide_index=True,
                         num_rows="fixed",
+                        column_config={
+                            "tf-a": st.column_config.NumberColumn("tf-a", disabled=True),
+                            "tc-a": st.column_config.NumberColumn("tc-a", disabled=True),
+                        },
                         key=f"p_edit_{run_idx}_v{current_ver}",
                         on_change=refresh_pulldown
                     )
+                    # Recompute averages from whatever tf/tc values were just edited
+                    edited_p_df = add_avg_columns(edited_p_df.drop(columns=["tf-a", "tc-a"], errors="ignore"))
                     
                     st.markdown("##### 📄 Original Uploaded Pulldown Matrix")
                     st.dataframe(
@@ -878,7 +904,7 @@ with tab3:
                         cpt_rows.append(row_entry)
 
                     if cpt_rows:
-                        cpt_df = pd.DataFrame(cpt_rows)
+                        cpt_df = add_avg_columns(pd.DataFrame(cpt_rows))
                         
                         if "original_cpt_data" not in record:
                             record["original_cpt_data"] = record["cpt_data"].copy()
@@ -900,19 +926,26 @@ with tab3:
                                 "Sensor": sensor_values.get("Sensor", 0.0)
                             })
                             
-                        original_cpt_df = pd.DataFrame(original_cpt_rows)
+                        original_cpt_df = add_avg_columns(pd.DataFrame(original_cpt_rows))
                         
                         def refresh_cpt():
                             pass
 
+                        # tf-a / tc-a are computed averages, shown but not directly editable
                         edited_cpt_df = st.data_editor(
                             cpt_df,
                             use_container_width=True,
                             hide_index=True,
                             num_rows="fixed",
+                            column_config={
+                                "tf-a": st.column_config.NumberColumn("tf-a", disabled=True),
+                                "tc-a": st.column_config.NumberColumn("tc-a", disabled=True),
+                            },
                             key=f"cpt_edit_{run_idx}_v{current_ver}",
                             on_change=refresh_cpt
                         )
+                        # Recompute averages from whatever tf/tc values were just edited
+                        edited_cpt_df = add_avg_columns(edited_cpt_df.drop(columns=["tf-a", "tc-a"], errors="ignore"))
                         
                         st.markdown("##### 📄 Original Uploaded CPT Matrix")
                         st.dataframe(
@@ -945,8 +978,8 @@ with tab3:
                             save_clicked = False
 
                         if save_clicked:
-                            # Save Pulldown Matrix
-                            record["pulldown_data"] = edited_p_df.iloc[0].to_dict()
+                            # Save Pulldown Matrix (tf-a/tc-a are computed display-only fields, never stored)
+                            record["pulldown_data"] = edited_p_df.drop(columns=["tf-a", "tc-a"], errors="ignore").iloc[0].to_dict()
 
                             # Save CPT Matrix
                             new_cpt = {}

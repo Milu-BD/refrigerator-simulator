@@ -140,7 +140,8 @@ def compute_avg_fields(values_dict):
     tc_a = round(sum(tc_vals) / len(tc_vals), 2) if tc_vals else 0.0
     return tf_a, tc_a
 
-# Adds tf-a and tc-a average columns to a single-row-per-record dataframe
+# Adds tf-a and tc-a average columns to a single-row-per-record dataframe,
+# positioned immediately after tf-5 and tc-3 respectively
 def add_avg_columns(df):
     df = df.copy()
     tf_cols = [c for c in ["tf-1", "tf-2", "tf-3", "tf-4", "tf-5"] if c in df.columns]
@@ -149,7 +150,19 @@ def add_avg_columns(df):
         df["tf-a"] = df[tf_cols].apply(pd.to_numeric, errors="coerce").mean(axis=1).round(2)
     if tc_cols:
         df["tc-a"] = df[tc_cols].apply(pd.to_numeric, errors="coerce").mean(axis=1).round(2)
-    return df
+
+    # Reorder so tf-a sits right after tf-5, and tc-a sits right after tc-3
+    cols = list(df.columns)
+
+    def move_after(cols, col_to_move, after_col):
+        if col_to_move in cols and after_col in cols:
+            cols.remove(col_to_move)
+            cols.insert(cols.index(after_col) + 1, col_to_move)
+        return cols
+
+    cols = move_after(cols, "tf-a", "tf-5")
+    cols = move_after(cols, "tc-a", "tc-3")
+    return df[cols]
 
 # Helper initialization to safeguard nested multi-arrangement structure
 def verify_db_structure(vol, arr_name, p_amb, c_amb):

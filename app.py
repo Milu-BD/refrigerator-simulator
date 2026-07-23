@@ -1077,40 +1077,59 @@ with tab3:
                         def refresh_cpt():
                             pass
 
-                        # tf-a / tc-a are computed averages, shown but not directly editable.
-                        # Test Flag / Metric identify which of the 4 rows (Mean/Min/Max/Avg) a row belongs to.
-                        edited_cpt_df = st.data_editor(
-                            cpt_df,
-                            use_container_width=True,
-                            hide_index=True,
-                            num_rows="fixed",
-                            column_config=build_column_config(
+                        cpt_edit_mode_key = f"cpt_edit_mode_{p_inspect_key}_{c_inspect_key}_{run_idx}"
+                        if cpt_edit_mode_key not in st.session_state:
+                            st.session_state[cpt_edit_mode_key] = False
+                        cpt_editor_widget_key = f"cpt_edit_{run_idx}_v{current_ver}"
+
+                        if not st.session_state[cpt_edit_mode_key]:
+                            # VIEW MODE — same real merged-cell (rowspan) look as the Original table below,
+                            # reflecting the current (possibly already-edited) values
+                            st.markdown(render_merged_cpt_table(cpt_df), unsafe_allow_html=True)
+                            if st.button("✏️ Edit CPT Matrix", key=f"cpt_edit_toggle_on_{run_idx}_v{current_ver}"):
+                                st.session_state[cpt_edit_mode_key] = True
+                                st.rerun()
+                            # Nothing pending to save on the CPT side while just viewing
+                            edited_cpt_df = cpt_df.copy()
+                        else:
+                            # EDIT MODE — editable grid (tf-a/tc-a/Test Flag/Metric are locked)
+                            edited_cpt_df = st.data_editor(
                                 cpt_df,
-                                disabled_cols=["tf-a", "tc-a", "Test Flag", "Metric"],
-                                text_cols=["Test Flag", "Metric"]
-                            ),
-                            key=f"cpt_edit_{run_idx}_v{current_ver}",
-                            on_change=refresh_cpt
-                        )
-                        # Recompute averages from whatever tf/tc values were just edited
-                        edited_cpt_df = round_df(add_avg_columns(edited_cpt_df.drop(columns=["tf-a", "tc-a"], errors="ignore")))
-                        
+                                use_container_width=True,
+                                hide_index=True,
+                                num_rows="fixed",
+                                column_config=build_column_config(
+                                    cpt_df,
+                                    disabled_cols=["tf-a", "tc-a", "Test Flag", "Metric"],
+                                    text_cols=["Test Flag", "Metric"]
+                                ),
+                                key=cpt_editor_widget_key,
+                                on_change=refresh_cpt
+                            )
+                            # Recompute averages from whatever tf/tc values were just edited
+                            edited_cpt_df = round_df(add_avg_columns(edited_cpt_df.drop(columns=["tf-a", "tc-a"], errors="ignore")))
+
+                            st.text_area(
+                                "📋 Copy Updated CPT Matrix",
+                                value=edited_cpt_df.to_csv(sep="\t", index=False),
+                                height=220,
+                                key=f"cpt_copy_{run_idx}_v{current_ver}"
+                            )
+
+                            if st.button("❌ Cancel Editing", key=f"cpt_edit_cancel_{run_idx}_v{current_ver}"):
+                                st.session_state.pop(cpt_editor_widget_key, None)
+                                st.session_state[cpt_edit_mode_key] = False
+                                st.rerun()
+
                         st.markdown("##### 📄 Original Uploaded CPT Matrix")
-                        # Real merged cells (rowspan) for Test Flag / S2 / Sensor — only possible
-                        # on a read-only HTML table, not on the editable grid above
+                        # Always reflects the file as first uploaded — never touched by edits
                         st.markdown(render_merged_cpt_table(original_cpt_df), unsafe_allow_html=True)
-                        
-                        st.text_area(
-                            "📋 Copy Updated CPT Matrix",
-                            value=edited_cpt_df.to_csv(sep="\t", index=False),
-                            height=220,
-                            key=f"cpt_copy_{run_idx}_v{current_ver}"
-                        )
 
                         # Detect changes
                         pulldown_changed = not edited_p_df.equals(p_df)
                         cpt_changed = not edited_cpt_df.equals(cpt_df)
                         dataset_changed = pulldown_changed or cpt_changed
+
 
 
                         if dataset_changed:
@@ -1158,6 +1177,9 @@ with tab3:
                             # Commit file data structure changes to the physical disk 
                             save_memory_to_disk(st.session_state.db)
                             
+                            # Return the CPT matrix to its merged read-only view, now showing the saved values
+                            st.session_state[cpt_edit_mode_key] = False
+
                             # INCREMENT VERSION: Wipes out the stale data cache instantly on rerun
                             st.session_state[version_key] += 1
                             

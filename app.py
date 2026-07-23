@@ -1077,29 +1077,21 @@ with tab3:
                         def refresh_cpt():
                             pass
 
-                        # st.data_editor can't merge cells, so Test Flag is blanked on continuation
-                        # rows (2nd-4th of each level) to visually read as one merged block. S2/Sensor
-                        # are already blank (NaN) everywhere except their one owning row (Mean/Min).
-                        cpt_df_display = blank_repeated_flag(cpt_df)
-
                         # tf-a / tc-a are computed averages, shown but not directly editable.
                         # Test Flag / Metric identify which of the 4 rows (Mean/Min/Max/Avg) a row belongs to.
-                        edited_cpt_df_raw = st.data_editor(
-                            cpt_df_display,
+                        edited_cpt_df = st.data_editor(
+                            cpt_df,
                             use_container_width=True,
                             hide_index=True,
                             num_rows="fixed",
                             column_config=build_column_config(
-                                cpt_df_display,
+                                cpt_df,
                                 disabled_cols=["tf-a", "tc-a", "Test Flag", "Metric"],
                                 text_cols=["Test Flag", "Metric"]
                             ),
                             key=f"cpt_edit_{run_idx}_v{current_ver}",
                             on_change=refresh_cpt
                         )
-                        # Restore full Test Flag values (undo the display-only blanking) before
-                        # doing any comparison, export, or save with this dataframe
-                        edited_cpt_df = forward_fill_flag(edited_cpt_df_raw)
                         # Recompute averages from whatever tf/tc values were just edited
                         edited_cpt_df = round_df(add_avg_columns(edited_cpt_df.drop(columns=["tf-a", "tc-a"], errors="ignore")))
                         

@@ -129,16 +129,127 @@ def to_float(v):
     try:
         if pd.isna(v) or str(v).strip() == "":
             return 0.0
-        return float(v)
+        return round(float(v), 1)
     except:
         return 0.0
+
+# Rounds every numeric column in a dataframe to 1 decimal place for display/export/save
+def round_df(df, decimals=1):
+    df = df.copy()
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    if len(numeric_cols) > 0:
+        df[numeric_cols] = df[numeric_cols].round(decimals)
+    return df
+
+# Builds a column_config dict: numeric columns get 1-decimal NumberColumns, text_cols
+# get TextColumns, and any column named in disabled_cols is locked from editing.
+def build_column_config(df, disabled_cols=None, text_cols=None):
+    disabled_cols = set(disabled_cols or [])
+    text_cols = set(text_cols or [])
+    config = {}
+    for col in df.columns:
+        if col in text_cols:
+            config[col] = st.column_config.TextColumn(col, disabled=(col in disabled_cols))
+        else:
+            config[col] = st.column_config.NumberColumn(col, format="%.1f", disabled=(col in disabled_cols))
+    return config
+
+# Blanks the Test Flag on continuation rows of a group (rows 2..N of each level),
+# so the editable grid visually reads like the Test Flag cell is "merged" downward.
+def blank_repeated_flag(df):
+    df = df.copy()
+    prev = object()  # sentinel that can't equal any real flag value
+    for idx in df.index:
+        cur = df.at[idx, "Test Flag"]
+        if cur == prev:
+            df.at[idx, "Test Flag"] = ""
+        else:
+            prev = cur
+    return df
+
+# Reverses blank_repeated_flag: fills blanked Test Flag cells with the nearest
+# non-blank value above them, so downstream save/comparison logic sees full values.
+def forward_fill_flag(df):
+    df = df.copy()
+    last = None
+    filled = []
+    for v in df["Test Flag"]:
+        if v is None or (isinstance(v, str) and v.strip() == ""):
+            filled.append(last)
+        else:
+            last = v
+            filled.append(v)
+    df["Test Flag"] = filled
+    return df
+
+# Renders a CPT dataframe as an HTML table with Test Flag, S2, and Sensor cells
+# genuinely merged (rowspan) across each level's group of Mean/Min/Max/(Max+Min)/2 rows.
+# Used for the read-only "Original Uploaded CPT Matrix" — st.data_editor can't merge cells,
+# but a plain HTML table (for display only) can.
+def render_merged_cpt_table(df):
+    if df.empty:
+        return "<p><em>No data</em></p>"
+
+    df = df.reset_index(drop=True)
+    cols = list(df.columns)
+    merge_cols = {"Test Flag", "S2", "Sensor"}
+    border = "border:1px solid rgba(120,120,120,0.5);"
+
+    def fmt(v):
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return ""
+        if isinstance(v, (int, float, np.floating, np.integer)):
+            return f"{float(v):.1f}"
+        return str(v)
+
+    html = ["<div style='overflow-x:auto;'>", "<table style='width:100%; border-collapse:collapse; font-size:14px;'>", "<thead><tr>"]
+    for c in cols:
+        html.append(f"<th style='{border} padding:6px 10px; text-align:center; font-weight:600;'>{c}</th>")
+    html.append("</tr></thead><tbody>")
+
+    n = len(df)
+    i = 0
+    while i < n:
+        flag_val = df.loc[i, "Test Flag"]
+        j = i
+        while j < n and df.loc[j, "Test Flag"] == flag_val:
+            j += 1
+        group_size = j - i
+
+        # Find the one row in this group that actually carries S2 (Mean row) / Sensor (Min row)
+        s2_val, sensor_val = None, None
+        for k in range(i, j):
+            if "S2" in df.columns and pd.notna(df.loc[k, "S2"]):
+                s2_val = df.loc[k, "S2"]
+            if "Sensor" in df.columns and pd.notna(df.loc[k, "Sensor"]):
+                sensor_val = df.loc[k, "Sensor"]
+
+        for local_idx, row_idx in enumerate(range(i, j)):
+            html.append("<tr>")
+            for c in cols:
+                if c == "Test Flag":
+                    if local_idx == 0:
+                        html.append(f"<td rowspan='{group_size}' style='{border} padding:6px 10px; text-align:center; vertical-align:middle; font-weight:600;'>{flag_val}</td>")
+                elif c == "S2":
+                    if local_idx == 0:
+                        html.append(f"<td rowspan='{group_size}' style='{border} padding:6px 10px; text-align:center; vertical-align:middle;'>{fmt(s2_val)}</td>")
+                elif c == "Sensor":
+                    if local_idx == 0:
+                        html.append(f"<td rowspan='{group_size}' style='{border} padding:6px 10px; text-align:center; vertical-align:middle;'>{fmt(sensor_val)}</td>")
+                else:
+                    html.append(f"<td style='{border} padding:6px 10px; text-align:center;'>{fmt(df.loc[row_idx, c])}</td>")
+            html.append("</tr>")
+        i = j
+
+    html.append("</tbody></table></div>")
+    return "".join(html)
 
 # Computes tf-a (avg of tf-1..tf-5) and tc-a (avg of tc-1..tc-3) for a dict of sensor values
 def compute_avg_fields(values_dict):
     tf_vals = [to_float(values_dict.get(f"tf-{i}", 0.0)) for i in range(1, 6)]
     tc_vals = [to_float(values_dict.get(f"tc-{i}", 0.0)) for i in range(1, 4)]
-    tf_a = round(sum(tf_vals) / len(tf_vals), 2) if tf_vals else 0.0
-    tc_a = round(sum(tc_vals) / len(tc_vals), 2) if tc_vals else 0.0
+    tf_a = round(sum(tf_vals) / len(tf_vals), 1) if tf_vals else 0.0
+    tc_a = round(sum(tc_vals) / len(tc_vals), 1) if tc_vals else 0.0
     return tf_a, tc_a
 
 # Adds tf-a and tc-a average columns to a single-row-per-record dataframe,
@@ -148,9 +259,9 @@ def add_avg_columns(df):
     tf_cols = [c for c in ["tf-1", "tf-2", "tf-3", "tf-4", "tf-5"] if c in df.columns]
     tc_cols = [c for c in ["tc-1", "tc-2", "tc-3"] if c in df.columns]
     if tf_cols:
-        df["tf-a"] = df[tf_cols].apply(pd.to_numeric, errors="coerce").mean(axis=1).round(2)
+        df["tf-a"] = df[tf_cols].apply(pd.to_numeric, errors="coerce").mean(axis=1).round(1)
     if tc_cols:
-        df["tc-a"] = df[tc_cols].apply(pd.to_numeric, errors="coerce").mean(axis=1).round(2)
+        df["tc-a"] = df[tc_cols].apply(pd.to_numeric, errors="coerce").mean(axis=1).round(1)
 
     # Reorder so tf-a sits right after tf-5, and tc-a sits right after tc-3
     cols = list(df.columns)
@@ -267,16 +378,16 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
                 row = {
                     "Sensor Value": f"{target_s} °C",
                     "Metric": metric_labels[metric_key],
-                    "tf-1": round(prediction[0], 2),
-                    "tf-2": round(prediction[1], 2),
-                    "tf-3": round(prediction[2], 2),
-                    "tf-4": round(prediction[3], 2),
-                    "tf-5": round(prediction[4], 2),
-                    "tc-1": round(prediction[5], 2),
-                    "tc-2": round(prediction[6], 2),
-                    "tc-3": round(prediction[7], 2),
-                    "tvc": round(prediction[8], 2),
-                    "S2": round(prediction[9], 2) if metric_key == "mean" else np.nan
+                    "tf-1": round(prediction[0], 1),
+                    "tf-2": round(prediction[1], 1),
+                    "tf-3": round(prediction[2], 1),
+                    "tf-4": round(prediction[3], 1),
+                    "tf-5": round(prediction[4], 1),
+                    "tc-1": round(prediction[5], 1),
+                    "tc-2": round(prediction[6], 1),
+                    "tc-3": round(prediction[7], 1),
+                    "tvc": round(prediction[8], 1),
+                    "S2": round(prediction[9], 1) if metric_key == "mean" else np.nan
                 }
                 predicted_rows.append(row)
 
@@ -436,7 +547,7 @@ with tab1:
                     lbl = row[0]
                     if lbl not in sheet_data:
                         try:
-                            sheet_data[lbl] = float(row[1])
+                            sheet_data[lbl] = round(float(row[1]), 1)
                         except (ValueError, TypeError):
                             continue
 
@@ -453,7 +564,7 @@ with tab1:
                 # Compute average for tvc from subcomponents if available
                 tvc_values = [sheet_data[lbl] for lbl in ['tvc1', 'tvc2', 'tvc3'] if lbl in sheet_data]
                 if tvc_values:
-                    st.session_state.active_pulldown_form['tvc'] = round(sum(tvc_values) / len(tvc_values), 4)
+                    st.session_state.active_pulldown_form['tvc'] = round(sum(tvc_values) / len(tvc_values), 1)
                 elif 'tvc' in sheet_data:
                     st.session_state.active_pulldown_form['tvc'] = sheet_data['tvc']
 
@@ -472,7 +583,7 @@ with tab1:
         for i, feat in enumerate(tc_features):
             # Prioritize extracted file data if available, otherwise use defaults
             if feat in st.session_state.active_pulldown_form:
-                curr_val = st.session_state.active_pulldown_form[feat]
+                curr_val = round(float(st.session_state.active_pulldown_form[feat]), 1)
             else:
                 curr_val = default_defaults.get(feat, 0.0)
                 
@@ -480,6 +591,8 @@ with tab1:
             val = u_cols[i].number_input(
                 f"{feat}:", 
                 value=curr_val, 
+                step=0.1,
+                format="%.1f",
                 key=f"sim_inp_{p_key}_{c_key}_{feat}_v{st.session_state.sim_ver}"
             )
             new_pulldown_input.append(val)
@@ -500,6 +613,8 @@ with tab1:
             s_val = s_cols[idx].number_input(
                 f"Sensor Query Point {idx+1} (°C):", 
                 value=default_sensor_val, 
+                step=0.1,
+                format="%.1f",
                 key=f"q_s_{p_key}_{c_key}_{idx}"
             )
             target_sensors.append(s_val)
@@ -512,7 +627,9 @@ with tab1:
                     st.error("Simulation engine run failed. Make sure dataset memory contains recorded instances.")
                 else:
                     st.markdown("### 📊 Consolidated Predictive Simulation Output Matrix")
-                    st.dataframe(df_final_predictions, use_container_width=True, hide_index=True)
+                    numeric_cols = [c for c in df_final_predictions.columns if c not in ("Sensor Value", "Metric")]
+                    pred_col_config = {c: st.column_config.NumberColumn(c, format="%.1f") for c in numeric_cols}
+                    st.dataframe(df_final_predictions, use_container_width=True, hide_index=True, column_config=pred_col_config)
 
 # ================= TAB 2: DATA REPOSITORY ROOM =================
 with tab2:
@@ -552,7 +669,7 @@ with tab2:
                 for _, row in df_p_sum.dropna(subset=[0]).iterrows():
                     lbl = row[0]
                     if lbl not in sheet_data:
-                        try: sheet_data[lbl] = float(row[1])
+                        try: sheet_data[lbl] = round(float(row[1]), 1)
                         except (ValueError, TypeError): continue
 
                 mapping_keys = {
@@ -566,7 +683,7 @@ with tab2:
                         
                 tvc_values = [sheet_data[lbl] for lbl in ['tvc1', 'tvc2', 'tvc3'] if lbl in sheet_data]
                 if tvc_values:
-                    p_extracted['tvc'] = round(sum(tvc_values) / len(tvc_values), 4)
+                    p_extracted['tvc'] = round(sum(tvc_values) / len(tvc_values), 1)
                 else:
                     p_extracted['tvc'] = 0.0
                     
@@ -595,14 +712,14 @@ with tab2:
                     ws = wb[sheet_name]
                     cpt_structured = {}
 
-                    # Safe numeric extraction
+                    # Safe numeric extraction, rounded to 1 decimal at the source
                     def safe_float(val):
                         if val is None:
                             return 0.0
                         try:
                             if isinstance(val, str):
                                 val = val.replace("°C", "").replace("̊C", "").strip()
-                            return float(val)
+                            return round(float(val), 1)
                         except (ValueError, TypeError):
                             return 0.0
 
@@ -717,16 +834,16 @@ with tab2:
                                 metric_key = metric_map.get(val_crit)
                                 if metric_key:
                                     cpt_structured[current_flag][metric_key] = {
-                                        "tf-1": float(row.get("tf1", 0.0)), "tf-2": float(row.get("tf2", 0.0)),
-                                        "tf-3": float(row.get("tf3", 0.0)), "tf-4": float(row.get("tf4", 0.0)),
-                                        "tf-5": float(row.get("tf5", 0.0)), "tc-1": float(row.get("tc1", 0.0)),
-                                        "tc-2": float(row.get("tc2", 0.0)), "tc-3": float(row.get("tc3", 0.0)),
-                                        "tvc":  float(row.get("vc", 0.0)),
+                                        "tf-1": round(float(row.get("tf1", 0.0)), 1), "tf-2": round(float(row.get("tf2", 0.0)), 1),
+                                        "tf-3": round(float(row.get("tf3", 0.0)), 1), "tf-4": round(float(row.get("tf4", 0.0)), 1),
+                                        "tf-5": round(float(row.get("tf5", 0.0)), 1), "tc-1": round(float(row.get("tc1", 0.0)), 1),
+                                        "tc-2": round(float(row.get("tc2", 0.0)), 1), "tc-3": round(float(row.get("tc3", 0.0)), 1),
+                                        "tvc":  round(float(row.get("vc", 0.0)), 1),
                                     }
                                     if metric_key == "mean":
-                                        cpt_structured[current_flag]["S2"] = float(row.get("s2", 0.0))
+                                        cpt_structured[current_flag]["S2"] = round(float(row.get("s2", 0.0)), 1)
                                     elif metric_key == "min":
-                                        cpt_structured[current_flag]["Sensor"] = float(row.get("sensor", 0.0))
+                                        cpt_structured[current_flag]["Sensor"] = round(float(row.get("sensor", 0.0)), 1)
                             if cpt_structured: parsed_successfully = True
                     except Exception: pass
 
@@ -747,23 +864,23 @@ with tab2:
                             if current_flag != "Unknown":
                                 if current_flag not in cpt_structured: cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0, "mean": {}}
                                 if clean_tag == "sensor":
-                                    try: cpt_structured[current_flag]["Sensor"] = float(r.iloc[5])
-                                    except (ValueError, TypeError, IndexError): cpt_structured[current_flag]["Sensor"] = float(r.iloc[1])
+                                    try: cpt_structured[current_flag]["Sensor"] = round(float(r.iloc[5]), 1)
+                                    except (ValueError, TypeError, IndexError): cpt_structured[current_flag]["Sensor"] = round(float(r.iloc[1]), 1)
                                 elif clean_tag == "s2":
-                                    cpt_structured[current_flag]["S2"] = float(r.iloc[8])
+                                    cpt_structured[current_flag]["S2"] = round(float(r.iloc[8]), 1)
                                 else:
                                     mapping_dict = {
                                         "tf1": "tf-1", "tf2": "tf-2", "tf3": "tf-3", "tf4": "tf-4", "tf5": "tf-5",
                                         "tc1": "tc-1", "tc2": "tc-2", "tc3": "tc-3"
                                     }
-                                    if clean_tag in mapping_dict: cpt_structured[current_flag]["mean"][mapping_dict[clean_tag]] = float(r.iloc[8])
+                                    if clean_tag in mapping_dict: cpt_structured[current_flag]["mean"][mapping_dict[clean_tag]] = round(float(r.iloc[8]), 1)
                                     elif "tvc" in clean_tag:
                                         if "tvc_vals" not in cpt_structured[current_flag]: cpt_structured[current_flag]["tvc_vals"] = []
                                         cpt_structured[current_flag]["tvc_vals"].append(float(r.iloc[8]))
 
                         for flg in cpt_structured:
                             if "tvc_vals" in cpt_structured[flg] and cpt_structured[flg]["tvc_vals"]:
-                                cpt_structured[flg]["mean"]["tvc"] = round(sum(cpt_structured[flg]["tvc_vals"]) / len(cpt_structured[flg]["tvc_vals"]), 4)
+                                cpt_structured[flg]["mean"]["tvc"] = round(sum(cpt_structured[flg]["tvc_vals"]) / len(cpt_structured[flg]["tvc_vals"]), 1)
                                 del cpt_structured[flg]["tvc_vals"]
                         parsed_successfully = True
                     except Exception: pass
@@ -880,12 +997,12 @@ with tab3:
                     # Section A: Display Pulldown Data Summary Table
                     st.markdown("#### 🔹 Counted Pulldown Matrix")
 
-                    p_df = add_avg_columns(pd.DataFrame([record["pulldown_data"]]))
+                    p_df = round_df(add_avg_columns(pd.DataFrame([record["pulldown_data"]])))
                     
                     if "original_pulldown_data" not in record:
                         record["original_pulldown_data"] = record["pulldown_data"].copy()
 
-                    original_p_df = add_avg_columns(pd.DataFrame([record["original_pulldown_data"]]))
+                    original_p_df = round_df(add_avg_columns(pd.DataFrame([record["original_pulldown_data"]])))
 
                     def refresh_pulldown():
                         pass
@@ -897,21 +1014,19 @@ with tab3:
                         use_container_width=True,
                         hide_index=True,
                         num_rows="fixed",
-                        column_config={
-                            "tf-a": st.column_config.NumberColumn("tf-a", disabled=True),
-                            "tc-a": st.column_config.NumberColumn("tc-a", disabled=True),
-                        },
+                        column_config=build_column_config(p_df, disabled_cols=["tf-a", "tc-a"]),
                         key=f"p_edit_{run_idx}_v{current_ver}",
                         on_change=refresh_pulldown
                     )
                     # Recompute averages from whatever tf/tc values were just edited
-                    edited_p_df = add_avg_columns(edited_p_df.drop(columns=["tf-a", "tc-a"], errors="ignore"))
+                    edited_p_df = round_df(add_avg_columns(edited_p_df.drop(columns=["tf-a", "tc-a"], errors="ignore")))
                     
                     st.markdown("##### 📄 Original Uploaded Pulldown Matrix")
                     st.dataframe(
                         original_p_df,
                         use_container_width=True,
-                        hide_index=True
+                        hide_index=True,
+                        column_config=build_column_config(original_p_df)
                     )
 
                     st.text_area(
@@ -951,42 +1066,47 @@ with tab3:
                     cpt_rows = build_cpt_rows(record["cpt_data"])
 
                     if cpt_rows:
-                        cpt_df = add_avg_columns(pd.DataFrame(cpt_rows))
+                        cpt_df = round_df(add_avg_columns(pd.DataFrame(cpt_rows)))
                         
                         if "original_cpt_data" not in record:
                             record["original_cpt_data"] = record["cpt_data"].copy()
 
                         original_cpt_rows = build_cpt_rows(record["original_cpt_data"])
-                        original_cpt_df = add_avg_columns(pd.DataFrame(original_cpt_rows))
+                        original_cpt_df = round_df(add_avg_columns(pd.DataFrame(original_cpt_rows)))
                         
                         def refresh_cpt():
                             pass
 
+                        # st.data_editor can't merge cells, so Test Flag is blanked on continuation
+                        # rows (2nd-4th of each level) to visually read as one merged block. S2/Sensor
+                        # are already blank (NaN) everywhere except their one owning row (Mean/Min).
+                        cpt_df_display = blank_repeated_flag(cpt_df)
+
                         # tf-a / tc-a are computed averages, shown but not directly editable.
                         # Test Flag / Metric identify which of the 4 rows (Mean/Min/Max/Avg) a row belongs to.
-                        edited_cpt_df = st.data_editor(
-                            cpt_df,
+                        edited_cpt_df_raw = st.data_editor(
+                            cpt_df_display,
                             use_container_width=True,
                             hide_index=True,
                             num_rows="fixed",
-                            column_config={
-                                "tf-a": st.column_config.NumberColumn("tf-a", disabled=True),
-                                "tc-a": st.column_config.NumberColumn("tc-a", disabled=True),
-                                "Test Flag": st.column_config.TextColumn("Test Flag", disabled=True),
-                                "Metric": st.column_config.TextColumn("Metric", disabled=True),
-                            },
+                            column_config=build_column_config(
+                                cpt_df_display,
+                                disabled_cols=["tf-a", "tc-a", "Test Flag", "Metric"],
+                                text_cols=["Test Flag", "Metric"]
+                            ),
                             key=f"cpt_edit_{run_idx}_v{current_ver}",
                             on_change=refresh_cpt
                         )
+                        # Restore full Test Flag values (undo the display-only blanking) before
+                        # doing any comparison, export, or save with this dataframe
+                        edited_cpt_df = forward_fill_flag(edited_cpt_df_raw)
                         # Recompute averages from whatever tf/tc values were just edited
-                        edited_cpt_df = add_avg_columns(edited_cpt_df.drop(columns=["tf-a", "tc-a"], errors="ignore"))
+                        edited_cpt_df = round_df(add_avg_columns(edited_cpt_df.drop(columns=["tf-a", "tc-a"], errors="ignore")))
                         
                         st.markdown("##### 📄 Original Uploaded CPT Matrix")
-                        st.dataframe(
-                            original_cpt_df,
-                            use_container_width=True,
-                            hide_index=True
-                        )
+                        # Real merged cells (rowspan) for Test Flag / S2 / Sensor — only possible
+                        # on a read-only HTML table, not on the editable grid above
+                        st.markdown(render_merged_cpt_table(original_cpt_df), unsafe_allow_html=True)
                         
                         st.text_area(
                             "📋 Copy Updated CPT Matrix",
@@ -999,6 +1119,7 @@ with tab3:
                         pulldown_changed = not edited_p_df.equals(p_df)
                         cpt_changed = not edited_cpt_df.equals(cpt_df)
                         dataset_changed = pulldown_changed or cpt_changed
+
 
                         if dataset_changed:
                             st.success("🟡 Unsaved changes detected.")

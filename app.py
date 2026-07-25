@@ -637,7 +637,10 @@ with tab1:
                     lbl = row[0]
                     if lbl not in sheet_data:
                         try:
-                            sheet_data[lbl] = round(float(row[1]), 1)
+                            parsed_val = float(row[1])
+                            if pd.isna(parsed_val):
+                                continue  # blank cell — don't treat as a found value
+                            sheet_data[lbl] = round(parsed_val, 1)
                         except (ValueError, TypeError):
                             continue
 
@@ -697,11 +700,12 @@ with tab1:
             new_pulldown_input.append(val)
 
         # Sensor is a genuinely distinct reading (from the pulldown file's own "Sensor" row),
-        # kept separate from the 10 fields above. If no sensor thermocouple reading was found
-        # in the uploaded file, the field is left empty and highlighted for manual entry.
+        # kept separate from the 10 fields above. Same behavior as tf-1..S2: auto-filled and
+        # editable when found in the file; empty, highlighted, and editable when not found.
         sensor_missing = 'Sensor' not in st.session_state.active_pulldown_form
         sensor_widget_key = f"sim_inp_{p_key}_{c_key}_Sensor_v{st.session_state.sim_ver}"
 
+        sensor_col, caption_col = st.columns([1, 3])
         if sensor_missing:
             # Best-effort visual highlight — targets the input by its accessible label.
             # If a future Streamlit version renders this differently, the highlight simply
@@ -711,7 +715,6 @@ with tab1:
                 "background-color:rgba(255,75,75,0.12) !important;}</style>",
                 unsafe_allow_html=True
             )
-            sensor_col, caption_col = st.columns([1, 3])
             with sensor_col:
                 new_pulldown_sensor = st.number_input(
                     "Sensor (°C):",
@@ -726,22 +729,16 @@ with tab1:
                     ":red[⚠️ No Sensor reading found in the uploaded pulldown file — please enter it manually.]"
                 )
         else:
-            sensor_col, caption_col = st.columns([1, 3])
             with sensor_col:
-                _found_sensor_val = round(float(st.session_state.active_pulldown_form['Sensor']), 1)
-                # Plain read-only text rather than a disabled widget — sidesteps any
-                # Streamlit-version quirks where disabled number_input can fail to
-                # visibly render its value, and unambiguously can't be edited.
-                st.markdown("Sensor (°C):")
-                st.markdown(
-                    f"<div style='border:1px solid rgba(120,120,120,0.5); border-radius:6px; "
-                    f"padding:8px 12px; font-size:16px; text-align:center; background-color:rgba(46,160,67,0.10);'>"
-                    f"{_found_sensor_val:.1f}</div>",
-                    unsafe_allow_html=True
+                new_pulldown_sensor = st.number_input(
+                    "Sensor (°C):",
+                    value=round(float(st.session_state.active_pulldown_form['Sensor']), 1),
+                    step=0.1,
+                    format="%.1f",
+                    key=sensor_widget_key
                 )
-                new_pulldown_sensor = _found_sensor_val
             with caption_col:
-                st.markdown(":green[✅ Sensor reading found in the uploaded file — locked from editing.]")
+                st.markdown(":green[✅ Sensor reading found in the uploaded file.]")
             
         st.markdown("---")
         
@@ -816,8 +813,13 @@ with tab2:
                 for _, row in df_p_sum.dropna(subset=[0]).iterrows():
                     lbl = row[0]
                     if lbl not in sheet_data:
-                        try: sheet_data[lbl] = round(float(row[1]), 1)
-                        except (ValueError, TypeError): continue
+                        try:
+                            parsed_val = float(row[1])
+                            if pd.isna(parsed_val):
+                                continue  # blank cell — don't treat as a found value
+                            sheet_data[lbl] = round(parsed_val, 1)
+                        except (ValueError, TypeError):
+                            continue
 
                 mapping_keys = {
                     'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 

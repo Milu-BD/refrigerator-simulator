@@ -182,17 +182,20 @@ def forward_fill_flag(df):
     df["Test Flag"] = filled
     return df
 
-# Renders a CPT dataframe as an HTML table with Test Flag, S2, and Sensor cells
-# genuinely merged (rowspan) across each level's group of Mean/Min/Max/(Max+Min)/2 rows.
-# Used for the read-only "Original Uploaded CPT Matrix" — st.data_editor can't merge cells,
-# but a plain HTML table (for display only) can.
-def render_merged_cpt_table(df):
+# Generic merged-cell (rowspan) HTML table renderer. Groups consecutive rows that
+# share the same value in `group_col`, and merges any column named in `merge_cols`
+# (in addition to group_col itself) into one spanning cell per group, showing the
+# first non-null value found in that group. Used for read-only display only —
+# st.data_editor can't render merged cells, but a plain HTML table can.
+def render_merged_table(df, group_col, merge_cols=None):
     if df.empty:
         return "<p><em>No data</em></p>"
 
+    merge_cols = set(merge_cols or [])
+    merge_cols.add(group_col)
+
     df = df.reset_index(drop=True)
     cols = list(df.columns)
-    merge_cols = {"Test Flag", "S2", "Sensor"}
     border = "border:1px solid rgba(120,120,120,0.5);"
 
     def fmt(v):
@@ -210,32 +213,32 @@ def render_merged_cpt_table(df):
     n = len(df)
     i = 0
     while i < n:
-        flag_val = df.loc[i, "Test Flag"]
+        group_val = df.loc[i, group_col]
         j = i
-        while j < n and df.loc[j, "Test Flag"] == flag_val:
+        while j < n and df.loc[j, group_col] == group_val:
             j += 1
         group_size = j - i
 
-        # Find the one row in this group that actually carries S2 (Mean row) / Sensor (Min row)
-        s2_val, sensor_val = None, None
-        for k in range(i, j):
-            if "S2" in df.columns and pd.notna(df.loc[k, "S2"]):
-                s2_val = df.loc[k, "S2"]
-            if "Sensor" in df.columns and pd.notna(df.loc[k, "Sensor"]):
-                sensor_val = df.loc[k, "Sensor"]
+        # For each merged column, find the one row in this group that actually carries a value
+        merged_vals = {}
+        for mcol in merge_cols:
+            if mcol == group_col or mcol not in df.columns:
+                continue
+            val = None
+            for k in range(i, j):
+                if pd.notna(df.loc[k, mcol]):
+                    val = df.loc[k, mcol]
+            merged_vals[mcol] = val
 
         for local_idx, row_idx in enumerate(range(i, j)):
             html.append("<tr>")
             for c in cols:
-                if c == "Test Flag":
+                if c == group_col:
                     if local_idx == 0:
-                        html.append(f"<td rowspan='{group_size}' style='{border} padding:6px 10px; text-align:center; vertical-align:middle; font-weight:600;'>{flag_val}</td>")
-                elif c == "S2":
+                        html.append(f"<td rowspan='{group_size}' style='{border} padding:6px 10px; text-align:center; vertical-align:middle; font-weight:600;'>{fmt(group_val)}</td>")
+                elif c in merge_cols:
                     if local_idx == 0:
-                        html.append(f"<td rowspan='{group_size}' style='{border} padding:6px 10px; text-align:center; vertical-align:middle;'>{fmt(s2_val)}</td>")
-                elif c == "Sensor":
-                    if local_idx == 0:
-                        html.append(f"<td rowspan='{group_size}' style='{border} padding:6px 10px; text-align:center; vertical-align:middle;'>{fmt(sensor_val)}</td>")
+                        html.append(f"<td rowspan='{group_size}' style='{border} padding:6px 10px; text-align:center; vertical-align:middle;'>{fmt(merged_vals.get(c))}</td>")
                 else:
                     html.append(f"<td style='{border} padding:6px 10px; text-align:center;'>{fmt(df.loc[row_idx, c])}</td>")
             html.append("</tr>")
@@ -243,6 +246,14 @@ def render_merged_cpt_table(df):
 
     html.append("</tbody></table></div>")
     return "".join(html)
+
+# CPT tables: merges Test Flag, S2 (Mean-only), and Sensor (Min-only) across each level's group
+def render_merged_cpt_table(df):
+    return render_merged_table(df, group_col="Test Flag", merge_cols=["S2", "Sensor"])
+
+# Predictions table: merges Sensor Value and S2 (Mean-only) across each query point's group of 4 metric rows
+def render_merged_predictions_table(df):
+    return render_merged_table(df, group_col="Sensor Value", merge_cols=["S2"])
 
 # Renders a dataframe as a plain styled HTML table (same visual style as
 # render_merged_cpt_table) with no merged cells — used for tables with no
@@ -659,9 +670,8 @@ with tab1:
                     st.error("Simulation engine run failed. Make sure dataset memory contains recorded instances.")
                 else:
                     st.markdown("### 📊 Consolidated Predictive Simulation Output Matrix")
-                    numeric_cols = [c for c in df_final_predictions.columns if c not in ("Sensor Value", "Metric")]
-                    pred_col_config = {c: st.column_config.NumberColumn(c, format="%.1f") for c in numeric_cols}
-                    st.dataframe(df_final_predictions, use_container_width=True, hide_index=True, column_config=pred_col_config)
+                    df_final_predictions = round_df(add_avg_columns(df_final_predictions))
+                    st.markdown(render_merged_predictions_table(df_final_predictions), unsafe_allow_html=True)
 
 # ================= TAB 2: DATA REPOSITORY ROOM =================
 with tab2:

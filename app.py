@@ -728,16 +728,20 @@ with tab1:
         else:
             sensor_col, caption_col = st.columns([1, 3])
             with sensor_col:
-                new_pulldown_sensor = st.number_input(
-                    "Sensor (°C):",
-                    value=round(float(st.session_state.active_pulldown_form['Sensor']), 1),
-                    step=0.1,
-                    format="%.1f",
-                    disabled=True,
-                    key=sensor_widget_key
+                _found_sensor_val = round(float(st.session_state.active_pulldown_form['Sensor']), 1)
+                # Plain read-only text rather than a disabled widget — sidesteps any
+                # Streamlit-version quirks where disabled number_input can fail to
+                # visibly render its value, and unambiguously can't be edited.
+                st.markdown("Sensor (°C):")
+                st.markdown(
+                    f"<div style='border:1px solid rgba(120,120,120,0.5); border-radius:6px; "
+                    f"padding:8px 12px; font-size:16px; text-align:center; background-color:rgba(46,160,67,0.10);'>"
+                    f"{_found_sensor_val:.1f}</div>",
+                    unsafe_allow_html=True
                 )
+                new_pulldown_sensor = _found_sensor_val
             with caption_col:
-                st.markdown(":green[✅ Sensor reading found in the uploaded file.]")
+                st.markdown(":green[✅ Sensor reading found in the uploaded file — locked from editing.]")
             
         st.markdown("---")
         

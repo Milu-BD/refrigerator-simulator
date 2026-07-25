@@ -123,8 +123,24 @@ metric_labels = {'mean': 'Mean', 'min': 'Min', 'max': 'Max', '(max+min)/2': '(Ma
 def normalize_sensor_name(name):
     if not isinstance(name, str):
         return ""
-    # Lowercase, remove hyphens, spaces, and underscores (e.g., "tf-1" -> "tf1")
-    return name.lower().replace(" ", "").replace("-", "").replace("_", "").strip()
+    # Lowercase, strip whitespace/punctuation commonly found around labels
+    # (e.g. "Sensor (°C)" / "Sensor:" / "Th. Sensor" -> "sensor" / "thsensor")
+    cleaned = name.lower().strip()
+    for ch in [" ", "-", "_", "(", ")", ":", ".", "°", "'", '"']:
+        cleaned = cleaned.replace(ch, "")
+    return cleaned
+
+# Finds the Sensor reading in a parsed sheet_data dict. Tries an exact normalized
+# match first ("sensor"), then falls back to any key containing "sensor" as a
+# substring (covers labels like "Sensor(oC)" -> "sensoroc", "ThSensor", etc.)
+# so real files aren't mistakenly treated as missing due to label wording.
+def find_sensor_reading(sheet_data):
+    if "sensor" in sheet_data:
+        return sheet_data["sensor"]
+    for lbl, val in sheet_data.items():
+        if "sensor" in lbl:
+            return val
+    return None
 def to_float(v):
     try:
         if pd.isna(v) or str(v).strip() == "":
@@ -645,8 +661,9 @@ with tab1:
                 # Sensor is tracked separately from the 10 tc_features — only set if the
                 # uploaded file actually has a "Sensor" reading; otherwise leave it absent
                 # so the field shows empty/highlighted rather than a fabricated number
-                if 'sensor' in sheet_data:
-                    st.session_state.active_pulldown_form['Sensor'] = sheet_data['sensor']
+                found_sensor = find_sensor_reading(sheet_data)
+                if found_sensor is not None:
+                    st.session_state.active_pulldown_form['Sensor'] = found_sensor
                 else:
                     st.session_state.active_pulldown_form.pop('Sensor', None)
 
@@ -709,15 +726,18 @@ with tab1:
                     ":red[⚠️ No Sensor reading found in the uploaded pulldown file — please enter it manually.]"
                 )
         else:
-            sensor_col = st.columns([1, 3])[0]
+            sensor_col, caption_col = st.columns([1, 3])
             with sensor_col:
                 new_pulldown_sensor = st.number_input(
                     "Sensor (°C):",
                     value=round(float(st.session_state.active_pulldown_form['Sensor']), 1),
                     step=0.1,
                     format="%.1f",
+                    disabled=True,
                     key=sensor_widget_key
                 )
+            with caption_col:
+                st.markdown(":green[✅ Sensor reading found in the uploaded file.]")
             
         st.markdown("---")
         
@@ -811,7 +831,7 @@ with tab2:
                     p_extracted['tvc'] = 0.0
                     
                 # None (not 0.0) when the file has no "Sensor" row — 0.0 could be a real reading
-                resolved_sensor = sheet_data.get('sensor', None)
+                resolved_sensor = find_sensor_reading(sheet_data)
                 
                 # 2. PARSE CPT DATA
                 cpt_structured = {}

@@ -244,6 +244,38 @@ def render_merged_cpt_table(df):
     html.append("</tbody></table></div>")
     return "".join(html)
 
+# Renders a dataframe as a plain styled HTML table (same visual style as
+# render_merged_cpt_table) with no merged cells — used for tables with no
+# grouping to merge across, like the single-row Pulldown Matrix.
+def render_simple_html_table(df):
+    if df.empty:
+        return "<p><em>No data</em></p>"
+
+    df = df.reset_index(drop=True)
+    cols = list(df.columns)
+    border = "border:1px solid rgba(120,120,120,0.5);"
+
+    def fmt(v):
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return ""
+        if isinstance(v, (int, float, np.floating, np.integer)):
+            return f"{float(v):.1f}"
+        return str(v)
+
+    html = ["<div style='overflow-x:auto;'>", "<table style='width:100%; border-collapse:collapse; font-size:14px;'>", "<thead><tr>"]
+    for c in cols:
+        html.append(f"<th style='{border} padding:6px 10px; text-align:center; font-weight:600;'>{c}</th>")
+    html.append("</tr></thead><tbody>")
+
+    for _, row in df.iterrows():
+        html.append("<tr>")
+        for c in cols:
+            html.append(f"<td style='{border} padding:6px 10px; text-align:center;'>{fmt(row[c])}</td>")
+        html.append("</tr>")
+
+    html.append("</tbody></table></div>")
+    return "".join(html)
+
 # Computes tf-a (avg of tf-1..tf-5) and tc-a (avg of tc-1..tc-3) for a dict of sensor values
 def compute_avg_fields(values_dict):
     tf_vals = [to_float(values_dict.get(f"tf-{i}", 0.0)) for i in range(1, 6)]
@@ -1007,34 +1039,41 @@ with tab3:
                     def refresh_pulldown():
                         pass
 
-                    # Key dynamically alters based on the current save version string
-                    # tf-a / tc-a are computed averages, shown but not directly editable
-                    edited_p_df = st.data_editor(
-                        p_df,
-                        use_container_width=True,
-                        hide_index=True,
-                        num_rows="fixed",
-                        column_config=build_column_config(p_df, disabled_cols=["tf-a", "tc-a"]),
-                        key=f"p_edit_{run_idx}_v{current_ver}",
-                        on_change=refresh_pulldown
-                    )
-                    # Recompute averages from whatever tf/tc values were just edited
-                    edited_p_df = round_df(add_avg_columns(edited_p_df.drop(columns=["tf-a", "tc-a"], errors="ignore")))
+                    pulldown_edit_mode_key = f"pulldown_edit_mode_{p_inspect_key}_{c_inspect_key}_{run_idx}"
+                    if pulldown_edit_mode_key not in st.session_state:
+                        st.session_state[pulldown_edit_mode_key] = False
+                    p_editor_widget_key = f"p_edit_{run_idx}_v{current_ver}"
+
+                    if not st.session_state[pulldown_edit_mode_key]:
+                        # VIEW MODE — same table style as the Original table below
+                        st.markdown(render_simple_html_table(p_df), unsafe_allow_html=True)
+                        if st.button("✏️ Edit Pulldown Matrix", key=f"p_edit_toggle_on_{run_idx}_v{current_ver}"):
+                            st.session_state[pulldown_edit_mode_key] = True
+                            st.rerun()
+                        # Nothing pending to save on the pulldown side while just viewing
+                        edited_p_df = p_df.copy()
+                    else:
+                        # EDIT MODE — editable grid; tf-a / tc-a are computed averages, shown but not directly editable
+                        edited_p_df = st.data_editor(
+                            p_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            num_rows="fixed",
+                            column_config=build_column_config(p_df, disabled_cols=["tf-a", "tc-a"]),
+                            key=p_editor_widget_key,
+                            on_change=refresh_pulldown
+                        )
+                        # Recompute averages from whatever tf/tc values were just edited
+                        edited_p_df = round_df(add_avg_columns(edited_p_df.drop(columns=["tf-a", "tc-a"], errors="ignore")))
+
+                        if st.button("❌ Cancel Editing", key=f"p_edit_cancel_{run_idx}_v{current_ver}"):
+                            st.session_state.pop(p_editor_widget_key, None)
+                            st.session_state[pulldown_edit_mode_key] = False
+                            st.rerun()
                     
                     st.markdown("##### 📄 Original Uploaded Pulldown Matrix")
-                    st.dataframe(
-                        original_p_df,
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config=build_column_config(original_p_df)
-                    )
-
-                    st.text_area(
-                        "📋 Copy Updated Pulldown Matrix",
-                        value=edited_p_df.to_csv(sep="\t", index=False),
-                        height=180,
-                        key=f"p_copy_{run_idx}_v{current_ver}"
-                    )
+                    # Always reflects the file as first uploaded — never touched by edits
+                    st.markdown(render_simple_html_table(original_p_df), unsafe_allow_html=True)
                     
                     # Section B: Display CPT Multivariable Flags Data Matrix
                     st.markdown("#### 🔹 Counted Positions for CPT Matrix")
@@ -1177,7 +1216,8 @@ with tab3:
                             # Commit file data structure changes to the physical disk 
                             save_memory_to_disk(st.session_state.db)
                             
-                            # Return the CPT matrix to its merged read-only view, now showing the saved values
+                            # Return the Pulldown and CPT matrices to their read-only view, now showing the saved values
+                            st.session_state[pulldown_edit_mode_key] = False
                             st.session_state[cpt_edit_mode_key] = False
 
                             # INCREMENT VERSION: Wipes out the stale data cache instantly on rerun

@@ -258,13 +258,17 @@ def render_merged_predictions_table(df):
 # Renders a dataframe as a plain styled HTML table (same visual style as
 # render_merged_cpt_table) with no merged cells — used for tables with no
 # grouping to merge across, like the single-row Pulldown Matrix.
-def render_simple_html_table(df):
+# highlight_missing_cols: column names whose cell gets a red-tinted background
+# when the value is missing (None/NaN), to flag data gaps like an absent Sensor reading.
+def render_simple_html_table(df, highlight_missing_cols=None):
     if df.empty:
         return "<p><em>No data</em></p>"
 
+    highlight_missing_cols = set(highlight_missing_cols or [])
     df = df.reset_index(drop=True)
     cols = list(df.columns)
     border = "border:1px solid rgba(120,120,120,0.5);"
+    highlight_style = "border:2px solid #ff4b4b; background-color:rgba(255,75,75,0.12);"
 
     def fmt(v):
         if v is None or (isinstance(v, float) and pd.isna(v)):
@@ -272,6 +276,9 @@ def render_simple_html_table(df):
         if isinstance(v, (int, float, np.floating, np.integer)):
             return f"{float(v):.1f}"
         return str(v)
+
+    def is_missing(v):
+        return v is None or (isinstance(v, float) and pd.isna(v))
 
     html = ["<div style='overflow-x:auto;'>", "<table style='width:100%; border-collapse:collapse; font-size:14px;'>", "<thead><tr>"]
     for c in cols:
@@ -281,11 +288,34 @@ def render_simple_html_table(df):
     for _, row in df.iterrows():
         html.append("<tr>")
         for c in cols:
-            html.append(f"<td style='{border} padding:6px 10px; text-align:center;'>{fmt(row[c])}</td>")
+            if c in highlight_missing_cols and is_missing(row[c]):
+                cell_style = f"{highlight_style} padding:6px 10px; text-align:center;"
+            else:
+                cell_style = f"{border} padding:6px 10px; text-align:center;"
+            html.append(f"<td style='{cell_style}'>{fmt(row[c])}</td>")
         html.append("</tr>")
 
     html.append("</tbody></table></div>")
     return "".join(html)
+
+# Builds a single-row Pulldown dataframe with a fixed, consistent column order
+# (tf-1..5, tc-1..3, tvc, S2, Sensor), regardless of the underlying dict's key order.
+# sensor_value may be None if no Sensor reading was ever found for this record.
+def build_pulldown_df(pulldown_data_dict, sensor_value):
+    row = {
+        "tf-1": pulldown_data_dict.get("tf-1", 0.0),
+        "tf-2": pulldown_data_dict.get("tf-2", 0.0),
+        "tf-3": pulldown_data_dict.get("tf-3", 0.0),
+        "tf-4": pulldown_data_dict.get("tf-4", 0.0),
+        "tf-5": pulldown_data_dict.get("tf-5", 0.0),
+        "tc-1": pulldown_data_dict.get("tc-1", 0.0),
+        "tc-2": pulldown_data_dict.get("tc-2", 0.0),
+        "tc-3": pulldown_data_dict.get("tc-3", 0.0),
+        "tvc": pulldown_data_dict.get("tvc", 0.0),
+        "S2": pulldown_data_dict.get("S2", 0.0),
+        "Sensor": sensor_value if sensor_value is not None else np.nan,
+    }
+    return pd.DataFrame([row])
 
 # Computes tf-a (avg of tf-1..tf-5) and tc-a (avg of tc-1..tc-3) for a dict of sensor values
 def compute_avg_fields(values_dict):
@@ -337,11 +367,12 @@ def verify_db_structure(vol, arr_name, p_amb, c_amb):
 # =================================================================
 # 4. ADVANCED INTERPOLATION ENGINE
 # =================================================================
-def run_automated_simulation(volume_records, new_pulldown, target_sensors):
+def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, target_sensors):
     """
     Generates a consolidated prediction dataframe where each Sensor Query Point produces
     4 rows — Mean, Min, Max, (Max+Min)/2 — each predicted from that criteria's historical
     data. S2 is only meaningful on the Mean row (it was only ever recorded there).
+    `pulldown_sensor` is the Pulldown-side Sensor reading (may be None if unavailable).
     """
     if not volume_records:
         return pd.DataFrame()
@@ -406,7 +437,7 @@ def run_automated_simulation(volume_records, new_pulldown, target_sensors):
                 y_arr = np.nan_to_num(np.array(y_train, dtype=np.float64), nan=0.0)
 
                 # Construct active query: current telemetry + the specific target query sensor step
-                current_baseline = clean_val(new_pulldown[-1]) if len(new_pulldown) == 10 else 35.0
+                current_baseline = clean_val(pulldown_sensor)
                 query_vector = np.nan_to_num(
                     np.array([clean_val(v) for v in new_pulldown] + [current_baseline, clean_val(target_s)], dtype=np.float64).reshape(1, -1),
                     nan=0.0
@@ -611,6 +642,14 @@ with tab1:
                 elif 'tvc' in sheet_data:
                     st.session_state.active_pulldown_form['tvc'] = sheet_data['tvc']
 
+                # Sensor is tracked separately from the 10 tc_features — only set if the
+                # uploaded file actually has a "Sensor" reading; otherwise leave it absent
+                # so the field shows empty/highlighted rather than a fabricated number
+                if 'sensor' in sheet_data:
+                    st.session_state.active_pulldown_form['Sensor'] = sheet_data['sensor']
+                else:
+                    st.session_state.active_pulldown_form.pop('Sensor', None)
+
                 st.session_state.last_uploaded_sim_file = sim_pulldown_file
                 # Increment key version to instantly clear old component cache and force update UI inputs
                 st.session_state.sim_ver += 1
@@ -639,6 +678,46 @@ with tab1:
                 key=f"sim_inp_{p_key}_{c_key}_{feat}_v{st.session_state.sim_ver}"
             )
             new_pulldown_input.append(val)
+
+        # Sensor is a genuinely distinct reading (from the pulldown file's own "Sensor" row),
+        # kept separate from the 10 fields above. If no sensor thermocouple reading was found
+        # in the uploaded file, the field is left empty and highlighted for manual entry.
+        sensor_missing = 'Sensor' not in st.session_state.active_pulldown_form
+        sensor_widget_key = f"sim_inp_{p_key}_{c_key}_Sensor_v{st.session_state.sim_ver}"
+
+        if sensor_missing:
+            # Best-effort visual highlight — targets the input by its accessible label.
+            # If a future Streamlit version renders this differently, the highlight simply
+            # won't apply; the empty field and caption below still make the gap clear.
+            st.markdown(
+                "<style>input[aria-label='Sensor (°C):']{border:2px solid #ff4b4b !important; "
+                "background-color:rgba(255,75,75,0.12) !important;}</style>",
+                unsafe_allow_html=True
+            )
+            sensor_col, caption_col = st.columns([1, 3])
+            with sensor_col:
+                new_pulldown_sensor = st.number_input(
+                    "Sensor (°C):",
+                    value=None,
+                    step=0.1,
+                    format="%.1f",
+                    placeholder="No data",
+                    key=sensor_widget_key
+                )
+            with caption_col:
+                st.markdown(
+                    ":red[⚠️ No Sensor reading found in the uploaded pulldown file — please enter it manually.]"
+                )
+        else:
+            sensor_col = st.columns([1, 3])[0]
+            with sensor_col:
+                new_pulldown_sensor = st.number_input(
+                    "Sensor (°C):",
+                    value=round(float(st.session_state.active_pulldown_form['Sensor']), 1),
+                    step=0.1,
+                    format="%.1f",
+                    key=sensor_widget_key
+                )
             
         st.markdown("---")
         
@@ -663,8 +742,10 @@ with tab1:
             target_sensors.append(s_val)
             
         if st.button("🚀 Generate Predictive CPT Dataset Matrices", type="primary"):
+            if new_pulldown_sensor is None:
+                st.warning("⚠️ Sensor value is empty — predictions will be generated using 0.0 °C for the Pulldown Sensor feature, which may reduce accuracy.")
             with st.spinner("Processing automated interpolation runs..."):
-                df_final_predictions = run_automated_simulation(vol_records, new_pulldown_input, target_sensors)
+                df_final_predictions = run_automated_simulation(vol_records, new_pulldown_input, new_pulldown_sensor, target_sensors)
                 
                 if df_final_predictions.empty:
                     st.error("Simulation engine run failed. Make sure dataset memory contains recorded instances.")
@@ -729,7 +810,8 @@ with tab2:
                 else:
                     p_extracted['tvc'] = 0.0
                     
-                resolved_sensor = sheet_data.get('sensor', 0.0)
+                # None (not 0.0) when the file has no "Sensor" row — 0.0 could be a real reading
+                resolved_sensor = sheet_data.get('sensor', None)
                 
                 # 2. PARSE CPT DATA
                 cpt_structured = {}
@@ -933,6 +1015,7 @@ with tab2:
 
                 new_block = {
                     "pulldown_baseline_sensor": resolved_sensor,
+                    "original_pulldown_baseline_sensor": resolved_sensor,
                     "original_pulldown_data": copy.deepcopy(p_extracted),
                     "original_cpt_data": copy.deepcopy(cpt_structured),
                     "pulldown_data": copy.deepcopy(p_extracted),
@@ -1021,7 +1104,9 @@ with tab3:
                     # Row management buttons
                     c_btn1, c_btn2 = st.columns([4, 1])
                     with c_btn1:
-                        st.markdown(f"**Baseline Sensor Target Setting:** `{record.get('pulldown_baseline_sensor', 0.0)}°C`")
+                        _baseline_sensor_display = record.get('pulldown_baseline_sensor')
+                        _baseline_sensor_text = "No data" if _baseline_sensor_display is None else f"{_baseline_sensor_display}°C"
+                        st.markdown(f"**Baseline Sensor Target Setting:** `{_baseline_sensor_text}`")
                     with c_btn2:
                         if st.button("🗑️ Delete Dataset", key=f"del_ds_{p_inspect_key}_{c_inspect_key}_{run_idx}"):
                             records.pop(run_idx)
@@ -1039,12 +1124,14 @@ with tab3:
                     # Section A: Display Pulldown Data Summary Table
                     st.markdown("#### 🔹 Counted Pulldown Matrix")
 
-                    p_df = round_df(add_avg_columns(pd.DataFrame([record["pulldown_data"]])))
+                    p_df = round_df(add_avg_columns(build_pulldown_df(record["pulldown_data"], record.get("pulldown_baseline_sensor"))))
                     
                     if "original_pulldown_data" not in record:
                         record["original_pulldown_data"] = record["pulldown_data"].copy()
+                    if "original_pulldown_baseline_sensor" not in record:
+                        record["original_pulldown_baseline_sensor"] = record.get("pulldown_baseline_sensor")
 
-                    original_p_df = round_df(add_avg_columns(pd.DataFrame([record["original_pulldown_data"]])))
+                    original_p_df = round_df(add_avg_columns(build_pulldown_df(record["original_pulldown_data"], record.get("original_pulldown_baseline_sensor"))))
 
                     def refresh_pulldown():
                         pass
@@ -1055,15 +1142,19 @@ with tab3:
                     p_editor_widget_key = f"p_edit_{run_idx}_v{current_ver}"
 
                     if not st.session_state[pulldown_edit_mode_key]:
-                        # VIEW MODE — same table style as the Original table below
-                        st.markdown(render_simple_html_table(p_df), unsafe_allow_html=True)
+                        # VIEW MODE — same table style as the Original table below; Sensor is
+                        # highlighted red if no reading was ever found for this record
+                        st.markdown(render_simple_html_table(p_df, highlight_missing_cols=["Sensor"]), unsafe_allow_html=True)
+                        if pd.isna(p_df.iloc[0]["Sensor"]):
+                            st.caption(":red[⚠️ No Sensor reading on file for this record.]")
                         if st.button("✏️ Edit Pulldown Matrix", key=f"p_edit_toggle_on_{run_idx}_v{current_ver}"):
                             st.session_state[pulldown_edit_mode_key] = True
                             st.rerun()
                         # Nothing pending to save on the pulldown side while just viewing
                         edited_p_df = p_df.copy()
                     else:
-                        # EDIT MODE — editable grid; tf-a / tc-a are computed averages, shown but not directly editable
+                        # EDIT MODE — editable grid; tf-a / tc-a are computed averages, shown but not directly editable.
+                        # st.data_editor can't highlight individual cells, so a caption below flags a missing Sensor instead.
                         edited_p_df = st.data_editor(
                             p_df,
                             use_container_width=True,
@@ -1075,6 +1166,8 @@ with tab3:
                         )
                         # Recompute averages from whatever tf/tc values were just edited
                         edited_p_df = round_df(add_avg_columns(edited_p_df.drop(columns=["tf-a", "tc-a"], errors="ignore")))
+                        if pd.isna(edited_p_df.iloc[0]["Sensor"]):
+                            st.caption(":red[⚠️ Sensor is empty — enter a value above if available.]")
 
                         if st.button("❌ Cancel Editing", key=f"p_edit_cancel_{run_idx}_v{current_ver}"):
                             st.session_state.pop(p_editor_widget_key, None)
@@ -1083,7 +1176,7 @@ with tab3:
                     
                     st.markdown("##### 📄 Original Uploaded Pulldown Matrix")
                     # Always reflects the file as first uploaded — never touched by edits
-                    st.markdown(render_simple_html_table(original_p_df), unsafe_allow_html=True)
+                    st.markdown(render_simple_html_table(original_p_df, highlight_missing_cols=["Sensor"]), unsafe_allow_html=True)
                     
                     # Section B: Display CPT Multivariable Flags Data Matrix
                     st.markdown("#### 🔹 Counted Positions for CPT Matrix")
@@ -1193,8 +1286,11 @@ with tab3:
                             save_clicked = False
 
                         if save_clicked:
-                            # Save Pulldown Matrix (tf-a/tc-a are computed display-only fields, never stored)
-                            record["pulldown_data"] = edited_p_df.drop(columns=["tf-a", "tc-a"], errors="ignore").iloc[0].to_dict()
+                            # Save Pulldown Matrix (tf-a/tc-a are computed display-only fields, never stored).
+                            # Sensor lives separately as pulldown_baseline_sensor, not inside pulldown_data.
+                            sensor_row_val = edited_p_df.iloc[0].get("Sensor")
+                            record["pulldown_baseline_sensor"] = None if pd.isna(sensor_row_val) else float(sensor_row_val)
+                            record["pulldown_data"] = edited_p_df.drop(columns=["tf-a", "tc-a", "Sensor"], errors="ignore").iloc[0].to_dict()
 
                             # Save CPT Matrix — reassemble the 4 rows per flag back into the nested structure
                             label_to_key = {v: k for k, v in metric_labels.items()}

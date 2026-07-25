@@ -5,7 +5,7 @@
                 "16C": [],
                 "32C": [
                     {
-                        "pulldown_baseline_sensor": NaN,
+                        "pulldown_baseline_sensor": -27.1,
                         "original_pulldown_data": {
                             "tf-1": -29.1,
                             "tf-2": -26.1,
@@ -269,8 +269,8 @@
                             "tc-1": -2.3,
                             "tc-2": -4.3,
                             "tc-3": -7.2,
-                            "S2": 30.9,
-                            "tvc": -2.0
+                            "tvc": -2.0,
+                            "S2": 30.9
                         },
                         "cpt_data": {
                             "level-5": {
@@ -513,7 +513,8 @@
                                     "tvc": 7.5
                                 }
                             }
-                        }
+                        },
+                        "original_pulldown_baseline_sensor": NaN
                     },
                     {
                         "pulldown_baseline_sensor": NaN,
@@ -1024,7 +1025,8 @@
                                     "tvc": 8.5
                                 }
                             }
-                        }
+                        },
+                        "original_pulldown_baseline_sensor": NaN
                     }
                 ]
             },

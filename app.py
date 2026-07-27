@@ -702,19 +702,11 @@ with tab1:
         # Sensor is a genuinely distinct reading (from the pulldown file's own "Sensor" row),
         # kept separate from the 10 fields above. Same behavior as tf-1..S2: auto-filled and
         # editable when found in the file; empty, highlighted, and editable when not found.
-        sensor_missing = 'Sensor' not in st.session_state.active_pulldown_form
+        sensor_missing_in_file = 'Sensor' not in st.session_state.active_pulldown_form
         sensor_widget_key = f"sim_inp_{p_key}_{c_key}_Sensor_v{st.session_state.sim_ver}"
 
         sensor_col, caption_col = st.columns([1, 3])
-        if sensor_missing:
-            # Best-effort visual highlight — targets the input by its accessible label.
-            # If a future Streamlit version renders this differently, the highlight simply
-            # won't apply; the empty field and caption below still make the gap clear.
-            st.markdown(
-                "<style>input[aria-label='Sensor (°C):']{border:2px solid #ff4b4b !important; "
-                "background-color:rgba(255,75,75,0.12) !important;}</style>",
-                unsafe_allow_html=True
-            )
+        if sensor_missing_in_file:
             with sensor_col:
                 new_pulldown_sensor = st.number_input(
                     "Sensor (°C):",
@@ -725,9 +717,20 @@ with tab1:
                     key=sensor_widget_key
                 )
             with caption_col:
-                st.markdown(
-                    ":red[⚠️ No Sensor reading found in the uploaded pulldown file — please enter it manually.]"
-                )
+                if new_pulldown_sensor is None:
+                    # Best-effort visual highlight — targets the input by its accessible label.
+                    # If a future Streamlit version renders this differently, the highlight simply
+                    # won't apply; the empty field and caption below still make the gap clear.
+                    st.markdown(
+                        "<style>input[aria-label='Sensor (°C):']{border:2px solid #ff4b4b !important; "
+                        "background-color:rgba(255,75,75,0.12) !important;}</style>",
+                        unsafe_allow_html=True
+                    )
+                    st.markdown(
+                        ":red[⚠️ No Sensor reading found in the uploaded pulldown file — please enter it manually.]"
+                    )
+                else:
+                    st.markdown(":blue[✏️ Sensor value entered manually.]")
         else:
             with sensor_col:
                 new_pulldown_sensor = st.number_input(

@@ -732,16 +732,20 @@ with tab1:
                 else:
                     st.markdown(":blue[✏️ Sensor value entered manually.]")
         else:
+            _file_sensor_val = round(float(st.session_state.active_pulldown_form['Sensor']), 1)
             with sensor_col:
                 new_pulldown_sensor = st.number_input(
                     "Sensor (°C):",
-                    value=round(float(st.session_state.active_pulldown_form['Sensor']), 1),
+                    value=_file_sensor_val,
                     step=0.1,
                     format="%.1f",
                     key=sensor_widget_key
                 )
             with caption_col:
-                st.markdown(":green[✅ Sensor reading found in the uploaded file.]")
+                if new_pulldown_sensor == _file_sensor_val:
+                    st.markdown(":green[✅ Sensor reading found in the uploaded file.]")
+                else:
+                    st.markdown(":blue[✏️ Sensor value entered manually.]")
             
         st.markdown("---")
         

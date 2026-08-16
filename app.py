@@ -265,7 +265,7 @@ def render_merged_table(df, group_col, merge_cols=None):
 
 # CPT tables: merges Test Flag, S2 (Mean-only), and Sensor (Min-only) across each level's group
 def render_merged_cpt_table(df):
-    return render_merged_table(df, group_col="Test Flag", merge_cols=["S2", "Sensor"])
+    return render_merged_table(df, group_col="Test Flag", merge_cols=["S2", "Sensor", "SensorMax"])
 
 # Predictions table: merges Sensor Value and S2 (Mean-only) across each query point's group of 4 metric rows
 def render_merged_predictions_table(df):
@@ -383,12 +383,17 @@ def verify_db_structure(vol, arr_name, p_amb, c_amb):
 # =================================================================
 # 4. ADVANCED INTERPOLATION ENGINE
 # =================================================================
-def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, target_sensors):
+def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, target_sensor_pairs):
     """
     Generates a consolidated prediction dataframe where each Sensor Query Point produces
     4 rows — Mean, Min, Max, (Max+Min)/2 — each predicted from that criteria's historical
     data. S2 is only meaningful on the Mean row (it was only ever recorded there).
     `pulldown_sensor` is the Pulldown-side Sensor reading (may be None if unavailable).
+    `target_sensor_pairs` is a list of (sensor_min, sensor_max) tuples, one per query point.
+    Each CPT criteria row is driven by its own matched Sensor feature:
+        Min row          -> Sensor Min reading
+        Max row          -> Sensor Max reading
+        Mean / (Max+Min)/2 -> average of Sensor Min and Sensor Max
     """
     if not volume_records:
         return pd.DataFrame()
@@ -401,12 +406,35 @@ def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, targ
         except (ValueError, TypeError):
             return 0.0
 
+    # Rough per-level fallback when a historical Sensor reading is missing/zero — the same
+    # heuristic used elsewhere in this app, with a small offset for the Max variant so it
+    # doesn't collapse onto the exact same fallback as Min.
+    def fallback_sensor(flag, offset=0.0):
+        if "1" in flag: base = -27.5
+        elif "2" in flag: base = -27.0
+        elif "3" in flag: base = -25.5
+        elif "4" in flag: base = -24.0
+        elif "5" in flag: base = -21.0
+        else: base = 0.0
+        return base + offset
+
+    def feature_for_metric(metric_key, sensor_min, sensor_max):
+        if metric_key == "min":
+            return sensor_min
+        elif metric_key == "max":
+            return sensor_max
+        else:  # "mean" and "(max+min)/2" both driven by the Min/Max average
+            return (sensor_min + sensor_max) / 2.0
+
     base_fields = ["tf-1", "tf-2", "tf-3", "tf-4", "tf-5", "tc-1", "tc-2", "tc-3", "tvc"]
 
     predicted_rows = []
 
     # Process each user manual query point, once per criteria (Mean/Min/Max/(Max+Min)/2)
-    for target_s in target_sensors:
+    for query_min, query_max in target_sensor_pairs:
+        query_min = clean_val(query_min)
+        query_max = clean_val(query_max)
+
         for metric_key in metric_types:
             X_train = []
             y_train = []
@@ -425,19 +453,18 @@ def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, targ
                     if not metric_data:
                         continue
 
-                    # Extract historical sensor cut-out temperature for this level block (flag-level, from the Min row)
-                    hist_sensor = clean_val(level_data.get("Sensor", level_data.get("sensor", 0.0)))
+                    # Historical Sensor Min/Max for this level, with fallback if missing/zero
+                    hist_sensor_min = clean_val(level_data.get("Sensor", 0.0))
+                    if hist_sensor_min == 0.0:
+                        hist_sensor_min = fallback_sensor(flag, offset=0.0)
+                    hist_sensor_max = clean_val(level_data.get("SensorMax", 0.0))
+                    if hist_sensor_max == 0.0:
+                        hist_sensor_max = fallback_sensor(flag, offset=1.0)
 
-                    # If Sensor value is missing or zero, use a default fallback matching common levels
-                    if hist_sensor == 0.0:
-                        if "1" in flag: hist_sensor = -27.5
-                        elif "2" in flag: hist_sensor = -27.0
-                        elif "3" in flag: hist_sensor = -25.5
-                        elif "4" in flag: hist_sensor = -24.0
-                        elif "5" in flag: hist_sensor = -21.0
+                    hist_feature = feature_for_metric(metric_key, hist_sensor_min, hist_sensor_max)
 
-                    # Formulate training input: Pulldown context matrix + specific level's target sensor value
-                    train_input = p_features + [p_baseline, hist_sensor]
+                    # Formulate training input: Pulldown context matrix + this level's matched sensor feature
+                    train_input = p_features + [p_baseline, hist_feature]
 
                     # Target output values to be predicted for this criteria (tf-1..5, tc-1..3, tvc)
                     train_target = [clean_val(metric_data.get(f, 0.0)) for f in base_fields]
@@ -452,10 +479,11 @@ def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, targ
                 X_arr = np.nan_to_num(np.array(X_train, dtype=np.float64), nan=0.0)
                 y_arr = np.nan_to_num(np.array(y_train, dtype=np.float64), nan=0.0)
 
-                # Construct active query: current telemetry + the specific target query sensor step
+                # Construct active query: current telemetry + this query point's matched sensor feature
                 current_baseline = clean_val(pulldown_sensor)
+                query_feature = feature_for_metric(metric_key, query_min, query_max)
                 query_vector = np.nan_to_num(
-                    np.array([clean_val(v) for v in new_pulldown] + [current_baseline, clean_val(target_s)], dtype=np.float64).reshape(1, -1),
+                    np.array([clean_val(v) for v in new_pulldown] + [current_baseline, query_feature], dtype=np.float64).reshape(1, -1),
                     nan=0.0
                 )
 
@@ -466,7 +494,7 @@ def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, targ
                 prediction = knn.predict(query_vector)[0]
 
                 row = {
-                    "Sensor Value": f"{target_s} °C",
+                    "Sensor Value": f"Min {query_min:.1f}°C / Max {query_max:.1f}°C",
                     "Metric": metric_labels[metric_key],
                     "tf-1": round(prediction[0], 1),
                     "tf-2": round(prediction[1], 1),
@@ -751,29 +779,40 @@ with tab1:
         
         # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
+        st.caption("Each query point needs a Sensor Min and Sensor Max reading. Min drives the Min-row prediction, Max drives the Max-row prediction, and Mean/(Max+Min)/2 are driven by their average.")
         
         num_targets = st.number_input("Number of target sensor points (1 to 7):", min_value=1, max_value=7, value=5, step=1)
         
-        target_sensors = []
+        target_sensor_pairs = []
         s_cols = st.columns(int(num_targets))
         for idx in range(int(num_targets)):
-            # Set up default sensor values for the 5 points (adjust the start value or step as needed)
-            default_sensor_val = -27.5 + (idx * 1.5) 
-            
-            s_val = s_cols[idx].number_input(
-                f"Sensor Query Point {idx+1} (°C):", 
-                value=default_sensor_val, 
-                step=0.1,
-                format="%.1f",
-                key=f"q_s_{p_key}_{c_key}_{idx}"
-            )
-            target_sensors.append(s_val)
+            # Set up default sensor values for the points (adjust the start value or step as needed)
+            default_min_val = -27.5 + (idx * 1.5)
+            default_max_val = default_min_val + 1.0
+
+            with s_cols[idx]:
+                st.markdown(f"**Point {idx+1}**")
+                min_val = st.number_input(
+                    "Sensor Min (°C):",
+                    value=default_min_val,
+                    step=0.1,
+                    format="%.1f",
+                    key=f"q_s_min_{p_key}_{c_key}_{idx}"
+                )
+                max_val = st.number_input(
+                    "Sensor Max (°C):",
+                    value=default_max_val,
+                    step=0.1,
+                    format="%.1f",
+                    key=f"q_s_max_{p_key}_{c_key}_{idx}"
+                )
+            target_sensor_pairs.append((min_val, max_val))
             
         if st.button("🚀 Generate Predictive CPT Dataset Matrices", type="primary"):
             if new_pulldown_sensor is None:
                 st.warning("⚠️ Sensor value is empty — predictions will be generated using 0.0 °C for the Pulldown Sensor feature, which may reduce accuracy.")
             with st.spinner("Processing automated interpolation runs..."):
-                df_final_predictions = run_automated_simulation(vol_records, new_pulldown_input, new_pulldown_sensor, target_sensors)
+                df_final_predictions = run_automated_simulation(vol_records, new_pulldown_input, new_pulldown_sensor, target_sensor_pairs)
                 
                 if df_final_predictions.empty:
                     st.error("Simulation engine run failed. Make sure dataset memory contains recorded instances.")
@@ -921,12 +960,12 @@ with tab2:
                         if "level" in colA.lower() or "boost" in colA.lower():
                             current_flag = colA
                             if current_flag not in cpt_structured:
-                                cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0}
+                                cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0, "SensorMax": 0.0}
 
                         if current_flag is None:
                             continue
                         if current_flag not in cpt_structured:
-                            cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0}
+                            cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0, "SensorMax": 0.0}
 
                         # Read strictly from mapped unhidden cells, one sub-block per criteria row
                         if colB in metric_types:
@@ -941,11 +980,14 @@ with tab2:
                                 "tc-3": safe_float(get_visible_value(data_row, 15)),
                                 "tvc": safe_float(get_visible_value(data_row, 17)),
                             }
-                            # S2 is only meaningful on the Mean row; Sensor only on the Min row
+                            # S2 is only meaningful on the Mean row; Sensor (Min) on the Min row,
+                            # SensorMax on the Max row — same column (19) as Sensor, different row
                             if colB == "mean":
                                 cpt_structured[current_flag]["S2"] = safe_float(get_visible_value(data_row, 21))
                             elif colB == "min":
                                 cpt_structured[current_flag]["Sensor"] = safe_float(get_visible_value(data_row, 19))
+                            elif colB == "max":
+                                cpt_structured[current_flag]["SensorMax"] = safe_float(get_visible_value(data_row, 19))
 
                     if cpt_structured:
                         parsed_successfully = True
@@ -979,7 +1021,7 @@ with tab2:
                                 val_crit = str(row.get("datacriteria", "")).strip().lower()
                                 
                                 if val_f1 and val_f1 != "nan" and val_f1 != current_flag: current_flag = val_f1
-                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0}
+                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0, "SensorMax": 0.0}
                                     
                                 try: rt_val = float(row.get("runtime_pct", 0.0))
                                 except (ValueError, TypeError): rt_val = 0.0
@@ -1001,6 +1043,8 @@ with tab2:
                                         cpt_structured[current_flag]["S2"] = round(float(row.get("s2", 0.0)), 1)
                                     elif metric_key == "min":
                                         cpt_structured[current_flag]["Sensor"] = round(float(row.get("sensor", 0.0)), 1)
+                                    elif metric_key == "max":
+                                        cpt_structured[current_flag]["SensorMax"] = round(float(row.get("sensor", 0.0)), 1)
                             if cpt_structured: parsed_successfully = True
                     except Exception: pass
 
@@ -1013,13 +1057,13 @@ with tab2:
                             val_0 = str(r.iloc[0]).strip()
                             if pd.notna(r.iloc[0]) and ("level" in val_0.lower() or "boost" in val_0.lower()):
                                 current_flag = val_0
-                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0, "mean": {}}
+                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0, "SensorMax": 0.0, "mean": {}}
                                 continue
                             if val_0.lower() in ["section", "min", "nan", ""] or pd.isna(r.iloc[0]): continue
                             clean_tag = normalize_sensor_name(val_0)
                             
                             if current_flag != "Unknown":
-                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0, "mean": {}}
+                                if current_flag not in cpt_structured: cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0, "SensorMax": 0.0, "mean": {}}
                                 if clean_tag == "sensor":
                                     try: cpt_structured[current_flag]["Sensor"] = round(float(r.iloc[5]), 1)
                                     except (ValueError, TypeError, IndexError): cpt_structured[current_flag]["Sensor"] = round(float(r.iloc[1]), 1)
@@ -1235,6 +1279,7 @@ with tab3:
                                     "tvc": metric_data.get("tvc", 0.0),
                                     "S2": flag_block.get("S2", 0.0) if metric_key == "mean" else np.nan,
                                     "Sensor": flag_block.get("Sensor", 0.0) if metric_key == "min" else np.nan,
+                                    "SensorMax": flag_block.get("SensorMax", 0.0) if metric_key == "max" else np.nan,
                                 })
                         return rows
 
@@ -1333,7 +1378,7 @@ with tab3:
                                 metric_key = label_to_key.get(row["Metric"], str(row["Metric"]).lower())
 
                                 if flag not in new_cpt:
-                                    new_cpt[flag] = {"S2": 0.0, "Sensor": 0.0}
+                                    new_cpt[flag] = {"S2": 0.0, "Sensor": 0.0, "SensorMax": 0.0}
 
                                 new_cpt[flag][metric_key] = {
                                     "tf-1": float(row["tf-1"]),
@@ -1350,6 +1395,8 @@ with tab3:
                                     new_cpt[flag]["S2"] = float(row["S2"])
                                 if metric_key == "min" and pd.notna(row["Sensor"]):
                                     new_cpt[flag]["Sensor"] = float(row["Sensor"])
+                                if metric_key == "max" and pd.notna(row["SensorMax"]):
+                                    new_cpt[flag]["SensorMax"] = float(row["SensorMax"])
                             record["cpt_data"] = new_cpt
 
                             # Commit file data structure changes to the physical disk 

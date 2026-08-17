@@ -779,9 +779,9 @@ with tab1:
         
         # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
-        st.caption("Each query point needs a Sensor Min and Sensor Max reading. Min drives the Min-row prediction, Max drives the Max-row prediction, and Mean/(Max+Min)/2 are driven by their average.")
+        st.caption("Each query point needs a Sensor Min and Sensor Max reading.")
         
-        num_targets = st.number_input("Number of target sensor points (1 to 7):", min_value=1, max_value=7, value=5, step=1)
+        num_targets = st.number_input("Number of target sensor points:", min_value=1, max_value=None, value=5, step=1)
         
         target_sensor_pairs = []
         s_cols = st.columns(int(num_targets))

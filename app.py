@@ -265,7 +265,7 @@ def render_merged_table(df, group_col, merge_cols=None):
 
 # CPT tables: merges Test Flag, S2 (Mean-only), and Sensor (Min-only) across each level's group
 def render_merged_cpt_table(df):
-    return render_merged_table(df, group_col="Test Flag", merge_cols=["S2", "Sensor", "SensorMax"])
+    return render_merged_table(df, group_col="Test Flag", merge_cols=["S2"])
 
 # Predictions table: merges Sensor Value and S2 (Mean-only) across each query point's group of 4 metric rows
 def render_merged_predictions_table(df):
@@ -788,7 +788,7 @@ with tab1:
         for idx in range(int(num_targets)):
             # Set up default sensor values for the points (adjust the start value or step as needed)
             default_min_val = -27.5 + (idx * 1.5)
-            default_max_val = default_min_val + 1.0
+            default_max_val = 4.0
 
             with s_cols[idx]:
                 st.markdown(f"**Point {idx+1}**")
@@ -1278,8 +1278,11 @@ with tab3:
                                     "tc-3": metric_data.get("tc-3", 0.0),
                                     "tvc": metric_data.get("tvc", 0.0),
                                     "S2": flag_block.get("S2", 0.0) if metric_key == "mean" else np.nan,
-                                    "Sensor": flag_block.get("Sensor", 0.0) if metric_key == "min" else np.nan,
-                                    "SensorMax": flag_block.get("SensorMax", 0.0) if metric_key == "max" else np.nan,
+                                    "Sensor": (
+                                        flag_block.get("Sensor", 0.0) if metric_key == "min"
+                                        else flag_block.get("SensorMax", 0.0) if metric_key == "max"
+                                        else np.nan
+                                    ),
                                 })
                         return rows
 
@@ -1393,10 +1396,13 @@ with tab3:
                                 }
                                 if metric_key == "mean" and pd.notna(row["S2"]):
                                     new_cpt[flag]["S2"] = float(row["S2"])
+                                # The Sensor column is now a single field, populated per-row:
+                                # its value on the Min row is the Sensor Min reading, and on the
+                                # Max row is the Sensor Max reading — route each back accordingly.
                                 if metric_key == "min" and pd.notna(row["Sensor"]):
                                     new_cpt[flag]["Sensor"] = float(row["Sensor"])
-                                if metric_key == "max" and pd.notna(row["SensorMax"]):
-                                    new_cpt[flag]["SensorMax"] = float(row["SensorMax"])
+                                if metric_key == "max" and pd.notna(row["Sensor"]):
+                                    new_cpt[flag]["SensorMax"] = float(row["Sensor"])
                             record["cpt_data"] = new_cpt
 
                             # Commit file data structure changes to the physical disk 

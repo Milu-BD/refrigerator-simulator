@@ -170,6 +170,66 @@ def build_column_config(df, disabled_cols=None, text_cols=None):
             config[col] = st.column_config.NumberColumn(col, format="%.1f", disabled=(col in disabled_cols))
     return config
 
+# Wraps st.data_editor with a snapshot-based Undo/Redo stack. NOTE: this is whole-table
+# undo/redo (each button press reverts/reapplies the entire table to a prior snapshot),
+# not per-cell — Streamlit's data_editor has no API for tracking individual cell edits,
+# so there's no way to undo "just the last cell" from the Python side.
+# base_key must be unique per editor instance (e.g. tied to record + edit-session version).
+def undoable_data_editor(base_key, initial_df, column_config, key_suffix=""):
+    undo_key = f"{base_key}_undo_stack"
+    redo_key = f"{base_key}_redo_stack"
+    base_df_key = f"{base_key}_base_df"
+    ver_key = f"{base_key}_ver"
+
+    if undo_key not in st.session_state:
+        st.session_state[undo_key] = []
+    if redo_key not in st.session_state:
+        st.session_state[redo_key] = []
+    if base_df_key not in st.session_state:
+        st.session_state[base_df_key] = initial_df.copy()
+    if ver_key not in st.session_state:
+        st.session_state[ver_key] = 0
+
+    editor_widget_key = f"{base_key}_editor{key_suffix}_v{st.session_state[ver_key]}"
+
+    edited_raw = st.data_editor(
+        st.session_state[base_df_key],
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        column_config=column_config,
+        key=editor_widget_key,
+    )
+    edited = round_df(add_avg_columns(edited_raw.drop(columns=["tf-a", "tc-a"], errors="ignore")))
+
+    # A real edit happened this rerun (not an undo/redo click) — snapshot the prior state
+    if not edited.equals(st.session_state[base_df_key]):
+        st.session_state[undo_key].append(st.session_state[base_df_key].copy())
+        st.session_state[base_df_key] = edited.copy()
+        st.session_state[redo_key] = []  # new edit invalidates any redo history
+
+    undo_col, redo_col, _spacer = st.columns([1, 1, 6])
+    with undo_col:
+        if st.button("↶ Undo", key=f"{base_key}_undo_btn", disabled=(len(st.session_state[undo_key]) == 0)):
+            st.session_state[redo_key].append(st.session_state[base_df_key].copy())
+            st.session_state[base_df_key] = st.session_state[undo_key].pop()
+            st.session_state[ver_key] += 1
+            st.rerun()
+    with redo_col:
+        if st.button("↷ Redo", key=f"{base_key}_redo_btn", disabled=(len(st.session_state[redo_key]) == 0)):
+            st.session_state[undo_key].append(st.session_state[base_df_key].copy())
+            st.session_state[base_df_key] = st.session_state[redo_key].pop()
+            st.session_state[ver_key] += 1
+            st.rerun()
+
+    return st.session_state[base_df_key]
+
+# Clears all Undo/Redo state for a given editor instance — call this whenever leaving
+# edit mode (Cancel or Save) so the next edit session starts with empty undo/redo stacks.
+def reset_undo_state(base_key):
+    for suffix in ("_undo_stack", "_redo_stack", "_base_df", "_ver"):
+        st.session_state.pop(f"{base_key}{suffix}", None)
+
 # Blanks the Test Flag on continuation rows of a group (rows 2..N of each level),
 # so the editable grid visually reads like the Test Flag cell is "merged" downward.
 def blank_repeated_flag(df):
@@ -1210,13 +1270,10 @@ with tab3:
 
                     original_p_df = round_df(add_avg_columns(build_pulldown_df(record["original_pulldown_data"], record.get("original_pulldown_baseline_sensor"))))
 
-                    def refresh_pulldown():
-                        pass
-
                     pulldown_edit_mode_key = f"pulldown_edit_mode_{p_inspect_key}_{c_inspect_key}_{run_idx}"
                     if pulldown_edit_mode_key not in st.session_state:
                         st.session_state[pulldown_edit_mode_key] = False
-                    p_editor_widget_key = f"p_edit_{run_idx}_v{current_ver}"
+                    p_undo_base_key = f"p_undo_{p_inspect_key}_{c_inspect_key}_{run_idx}_v{current_ver}"
 
                     if not st.session_state[pulldown_edit_mode_key]:
                         # VIEW MODE — same table style as the Original table below; Sensor is
@@ -1230,24 +1287,20 @@ with tab3:
                         # Nothing pending to save on the pulldown side while just viewing
                         edited_p_df = p_df.copy()
                     else:
-                        # EDIT MODE — editable grid; tf-a / tc-a are computed averages, shown but not directly editable.
-                        # st.data_editor can't highlight individual cells, so a caption below flags a missing Sensor instead.
-                        edited_p_df = st.data_editor(
+                        # EDIT MODE — editable grid with Undo/Redo (whole-table snapshots, not
+                        # per-cell — see undoable_data_editor). tf-a/tc-a are computed averages,
+                        # shown but not directly editable. st.data_editor can't highlight
+                        # individual cells, so a caption below flags a missing Sensor instead.
+                        edited_p_df = undoable_data_editor(
+                            p_undo_base_key,
                             p_df,
-                            use_container_width=True,
-                            hide_index=True,
-                            num_rows="fixed",
-                            column_config=build_column_config(p_df, disabled_cols=["tf-a", "tc-a"]),
-                            key=p_editor_widget_key,
-                            on_change=refresh_pulldown
+                            build_column_config(p_df, disabled_cols=["tf-a", "tc-a"])
                         )
-                        # Recompute averages from whatever tf/tc values were just edited
-                        edited_p_df = round_df(add_avg_columns(edited_p_df.drop(columns=["tf-a", "tc-a"], errors="ignore")))
                         if pd.isna(edited_p_df.iloc[0]["Sensor"]):
                             st.caption(":red[⚠️ Sensor is empty — enter a value above if available.]")
 
                         if st.button("❌ Cancel Editing", key=f"p_edit_cancel_{run_idx}_v{current_ver}"):
-                            st.session_state.pop(p_editor_widget_key, None)
+                            reset_undo_state(p_undo_base_key)
                             st.session_state[pulldown_edit_mode_key] = False
                             st.rerun()
                     
@@ -1297,13 +1350,10 @@ with tab3:
                         original_cpt_rows = build_cpt_rows(record["original_cpt_data"])
                         original_cpt_df = round_df(add_avg_columns(pd.DataFrame(original_cpt_rows)))
                         
-                        def refresh_cpt():
-                            pass
-
                         cpt_edit_mode_key = f"cpt_edit_mode_{p_inspect_key}_{c_inspect_key}_{run_idx}"
                         if cpt_edit_mode_key not in st.session_state:
                             st.session_state[cpt_edit_mode_key] = False
-                        cpt_editor_widget_key = f"cpt_edit_{run_idx}_v{current_ver}"
+                        cpt_undo_base_key = f"cpt_undo_{p_inspect_key}_{c_inspect_key}_{run_idx}_v{current_ver}"
 
                         if not st.session_state[cpt_edit_mode_key]:
                             # VIEW MODE — same real merged-cell (rowspan) look as the Original table below,
@@ -1315,32 +1365,20 @@ with tab3:
                             # Nothing pending to save on the CPT side while just viewing
                             edited_cpt_df = cpt_df.copy()
                         else:
-                            # EDIT MODE — editable grid (tf-a/tc-a/Test Flag/Metric are locked)
-                            edited_cpt_df = st.data_editor(
+                            # EDIT MODE — editable grid with Undo/Redo (whole-table snapshots, not
+                            # per-cell — see undoable_data_editor). tf-a/tc-a/Test Flag/Metric are locked.
+                            edited_cpt_df = undoable_data_editor(
+                                cpt_undo_base_key,
                                 cpt_df,
-                                use_container_width=True,
-                                hide_index=True,
-                                num_rows="fixed",
-                                column_config=build_column_config(
+                                build_column_config(
                                     cpt_df,
                                     disabled_cols=["tf-a", "tc-a", "Test Flag", "Metric"],
                                     text_cols=["Test Flag", "Metric"]
-                                ),
-                                key=cpt_editor_widget_key,
-                                on_change=refresh_cpt
-                            )
-                            # Recompute averages from whatever tf/tc values were just edited
-                            edited_cpt_df = round_df(add_avg_columns(edited_cpt_df.drop(columns=["tf-a", "tc-a"], errors="ignore")))
-
-                            st.text_area(
-                                "📋 Copy Updated CPT Matrix",
-                                value=edited_cpt_df.to_csv(sep="\t", index=False),
-                                height=220,
-                                key=f"cpt_copy_{run_idx}_v{current_ver}"
+                                )
                             )
 
                             if st.button("❌ Cancel Editing", key=f"cpt_edit_cancel_{run_idx}_v{current_ver}"):
-                                st.session_state.pop(cpt_editor_widget_key, None)
+                                reset_undo_state(cpt_undo_base_key)
                                 st.session_state[cpt_edit_mode_key] = False
                                 st.rerun()
 
@@ -1411,6 +1449,8 @@ with tab3:
                             # Return the Pulldown and CPT matrices to their read-only view, now showing the saved values
                             st.session_state[pulldown_edit_mode_key] = False
                             st.session_state[cpt_edit_mode_key] = False
+                            reset_undo_state(p_undo_base_key)
+                            reset_undo_state(cpt_undo_base_key)
 
                             # INCREMENT VERSION: Wipes out the stale data cache instantly on rerun
                             st.session_state[version_key] += 1

@@ -1570,12 +1570,6 @@
                         "enabled": true
                     },
                     {
-                        "name": "CC",
-                        "prefix": "tcc",
-                        "count": 3,
-                        "enabled": true
-                    },
-                    {
                         "name": "PC",
                         "prefix": "tc",
                         "count": 3,

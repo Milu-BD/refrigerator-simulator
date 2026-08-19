@@ -1591,7 +1591,7 @@
                         "name": "PCC",
                         "prefix": "tpcc",
                         "count": 3,
-                        "enabled": true
+                        "enabled": false
                     }
                 ],
                 "sensors": [

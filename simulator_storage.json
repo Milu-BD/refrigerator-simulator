@@ -1580,6 +1580,12 @@
                         "prefix": "tvc",
                         "count": 3,
                         "enabled": true
+                    },
+                    {
+                        "name": "CC",
+                        "prefix": "tcc",
+                        "count": 3,
+                        "enabled": true
                     }
                 ],
                 "sensors": [

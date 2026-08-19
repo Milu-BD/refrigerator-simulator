@@ -1579,7 +1579,7 @@
                         "name": "VC",
                         "prefix": "tvc",
                         "count": 3,
-                        "enabled": false
+                        "enabled": true
                     }
                 ],
                 "sensors": [

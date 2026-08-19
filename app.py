@@ -112,6 +112,12 @@ if "arr_form_id" not in st.session_state:
 if "model_form_id" not in st.session_state:
     st.session_state.model_form_id = 0
 
+if "cabinet_form_id" not in st.session_state:
+    st.session_state.cabinet_form_id = 0
+
+if "sensor_form_id" not in st.session_state:
+    st.session_state.sensor_form_id = 0
+
 # Global configuration constants
 tc_features = ['tf-1', 'tf-2', 'tf-3', 'tf-4', 'tf-5', 'tc-1', 'tc-2', 'tc-3', 'tvc', 'S2']
 metric_types = ['mean', 'min', 'max', '(max+min)/2']
@@ -441,7 +447,60 @@ def verify_db_structure(vol, arr_name, p_amb, c_amb):
         st.session_state.db[vol][arr_name][p_amb][c_amb] = []
 
 # =================================================================
-# 4. ADVANCED INTERPOLATION ENGINE
+# 3B. CABINET & SENSOR CONFIGURATION (per Volume Model + Arrangement)
+# =================================================================
+# Built-in cabinets keep their established, historical key prefixes (tf/tc were already
+# used everywhere before this system existed) — CC and VC happen to already follow the
+# "t" + lowercase-name pattern, which custom cabinets also use going forward.
+BUILTIN_CABINET_PREFIXES = {"FC": "tf", "PC": "tc", "CC": "tcc", "VC": "tvc"}
+
+def derive_cabinet_prefix(name):
+    key = name.strip().upper()
+    if key in BUILTIN_CABINET_PREFIXES:
+        return BUILTIN_CABINET_PREFIXES[key]
+    clean = normalize_sensor_name(name)
+    return f"t{clean}" if clean else "tx"
+
+def default_cabinet_sensor_config():
+    return {
+        "cabinets": [
+            {"name": "FC", "prefix": "tf", "count": 5, "enabled": True},
+            {"name": "CC", "prefix": "tcc", "count": 3, "enabled": True},
+            {"name": "PC", "prefix": "tc", "count": 3, "enabled": True},
+            {"name": "VC", "prefix": "tvc", "count": 3, "enabled": True},
+        ],
+        "sensors": ["Sensor-1"],
+        # Which sensors control which channel key (e.g. "tf-1"). A channel absent from this
+        # map, or mapped to an empty list, is treated as controlled by every active sensor —
+        # same rule as S2, which never appears here at all since it has no cabinet checkbox.
+        "channel_sensor_map": {},
+    }
+
+def get_cabinet_sensor_config(vol, arr_name):
+    """Returns (and lazily initializes) the cabinet/sensor config for a Volume+Arrangement."""
+    if vol not in st.session_state.db or not isinstance(st.session_state.db[vol], dict):
+        st.session_state.db[vol] = {}
+    if arr_name not in st.session_state.db[vol] or not isinstance(st.session_state.db[vol][arr_name], dict):
+        st.session_state.db[vol][arr_name] = {}
+    if "_config" not in st.session_state.db[vol][arr_name] or not isinstance(st.session_state.db[vol][arr_name]["_config"], dict):
+        st.session_state.db[vol][arr_name]["_config"] = default_cabinet_sensor_config()
+    cfg = st.session_state.db[vol][arr_name]["_config"]
+    # Backfill any missing keys for configs saved by an older version of this app
+    cfg.setdefault("cabinets", default_cabinet_sensor_config()["cabinets"])
+    cfg.setdefault("sensors", ["Sensor-1"])
+    cfg.setdefault("channel_sensor_map", {})
+    return cfg
+
+def all_channel_keys(cabinet_config):
+    """Flat list of every channel key (e.g. 'tf-1', 'tf-2', ...) across all cabinets,
+    regardless of enabled state — used to build the sensor-assignment checklist."""
+    keys = []
+    for cab in cabinet_config["cabinets"]:
+        for i in range(1, int(cab.get("count", 0)) + 1):
+            keys.append(f"{cab['prefix']}-{i}")
+    return keys
+
+
 # =================================================================
 def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, target_sensor_pairs):
     """
@@ -884,7 +943,131 @@ with tab1:
 # ================= TAB 2: DATA REPOSITORY ROOM =================
 with tab2:
     st.subheader(f"Onboard Lab Reports for [{selected_volume}] ({selected_arrangement})")
-    
+
+    # ============ CABINET & SENSOR CONFIGURATION ============
+    cab_sensor_cfg = get_cabinet_sensor_config(selected_volume, selected_arrangement)
+
+    with st.expander(f"🗄️ Cabinet & Sensor Configuration for [{selected_volume}] ({selected_arrangement})", expanded=False):
+        st.markdown("##### Cabinets")
+        st.caption("Uncheck a cabinet to stop collecting/predicting it going forward. Set the thermocouple count per cabinet — there's no upper limit; if an uploaded file is missing a channel, you'll be asked to enter it manually.")
+
+        cabinets_changed = False
+        cab_to_delete = None
+        for cab_idx, cab in enumerate(cab_sensor_cfg["cabinets"]):
+            c_chk, c_name, c_count, c_del = st.columns([1, 3, 2, 1])
+            with c_chk:
+                new_enabled = st.checkbox("", value=cab.get("enabled", True), key=f"cab_enabled_{selected_volume}_{selected_arrangement}_{cab_idx}")
+                if new_enabled != cab.get("enabled", True):
+                    cab["enabled"] = new_enabled
+                    cabinets_changed = True
+            with c_name:
+                st.markdown(f"**{cab['name']}** `({cab['prefix']}-N)`")
+            with c_count:
+                new_count = st.number_input(
+                    "Thermocouple count",
+                    min_value=0, max_value=None, step=1, value=int(cab.get("count", 0)),
+                    key=f"cab_count_{selected_volume}_{selected_arrangement}_{cab_idx}",
+                    label_visibility="collapsed"
+                )
+                if int(new_count) != cab.get("count", 0):
+                    cab["count"] = int(new_count)
+                    cabinets_changed = True
+            with c_del:
+                if st.button("🗑️", key=f"cab_del_{selected_volume}_{selected_arrangement}_{cab_idx}"):
+                    cab_to_delete = cab_idx
+
+        if cab_to_delete is not None:
+            removed_name = cab_sensor_cfg["cabinets"][cab_to_delete]["name"]
+            cab_sensor_cfg["cabinets"].pop(cab_to_delete)
+            save_memory_to_disk(st.session_state.db)
+            st.success(f"Cabinet '{removed_name}' removed.")
+            st.rerun()
+        elif cabinets_changed:
+            save_memory_to_disk(st.session_state.db)
+
+        new_cab_name = st.text_input("➕ Add Cabinet:", placeholder="e.g., DC", key=f"input_cabinet_{st.session_state.cabinet_form_id}")
+        if st.button("Register Cabinet"):
+            if new_cab_name and new_cab_name.strip():
+                clean_name = new_cab_name.strip()
+                existing_names = [c["name"].strip().upper() for c in cab_sensor_cfg["cabinets"]]
+                if clean_name.upper() in existing_names:
+                    st.error(f"A cabinet named '{clean_name}' already exists.")
+                else:
+                    cab_sensor_cfg["cabinets"].append({
+                        "name": clean_name,
+                        "prefix": derive_cabinet_prefix(clean_name),
+                        "count": 3,
+                        "enabled": True,
+                    })
+                    save_memory_to_disk(st.session_state.db)
+                    st.session_state.cabinet_form_id += 1
+                    st.success(f"Cabinet '{clean_name}' added.")
+                    st.rerun()
+
+        st.markdown("---")
+        st.markdown("##### Sensors")
+        st.caption("With only 1 sensor, everything works as a single shared Sensor Min/Max. With 2+ sensors, assign which sensor(s) control each thermocouple below — a channel left unassigned to any sensor is treated as controlled by all active sensors.")
+
+        sensor_to_delete = None
+        for s_idx, s_name in enumerate(cab_sensor_cfg["sensors"]):
+            s_col, s_del_col = st.columns([4, 1])
+            with s_col:
+                st.markdown(f"**{s_name}**")
+            with s_del_col:
+                if len(cab_sensor_cfg["sensors"]) > 1 and st.button("🗑️", key=f"sensor_del_{selected_volume}_{selected_arrangement}_{s_idx}"):
+                    sensor_to_delete = s_idx
+
+        if sensor_to_delete is not None:
+            removed_sensor = cab_sensor_cfg["sensors"][sensor_to_delete]
+            cab_sensor_cfg["sensors"].pop(sensor_to_delete)
+            # Drop the removed sensor from any per-channel assignments
+            for chan, assigned in cab_sensor_cfg["channel_sensor_map"].items():
+                if removed_sensor in assigned:
+                    assigned.remove(removed_sensor)
+            save_memory_to_disk(st.session_state.db)
+            st.success(f"'{removed_sensor}' removed.")
+            st.rerun()
+
+        new_sensor_name = st.text_input("➕ Add Sensor:", placeholder="e.g., Sensor-2", key=f"input_sensor_{st.session_state.sensor_form_id}")
+        if st.button("Register Sensor"):
+            if new_sensor_name and new_sensor_name.strip():
+                clean_sensor = new_sensor_name.strip()
+                if clean_sensor in cab_sensor_cfg["sensors"]:
+                    st.error(f"A sensor named '{clean_sensor}' already exists.")
+                else:
+                    cab_sensor_cfg["sensors"].append(clean_sensor)
+                    save_memory_to_disk(st.session_state.db)
+                    st.session_state.sensor_form_id += 1
+                    st.success(f"Sensor '{clean_sensor}' added.")
+                    st.rerun()
+
+        # Per-channel sensor assignment — only meaningful with 2+ sensors
+        if len(cab_sensor_cfg["sensors"]) >= 2:
+            st.markdown("###### Which sensor(s) control each thermocouple")
+            channel_keys = all_channel_keys(cab_sensor_cfg)
+            if not channel_keys:
+                st.info("No thermocouples configured yet — set a count on at least one cabinet above.")
+            else:
+                assignment_changed = False
+                for chan_key in channel_keys:
+                    current_assignment = cab_sensor_cfg["channel_sensor_map"].get(chan_key, [])
+                    # Keep only still-valid sensor names (in case one was renamed/removed)
+                    current_assignment = [s for s in current_assignment if s in cab_sensor_cfg["sensors"]]
+                    new_assignment = st.multiselect(
+                        chan_key,
+                        options=cab_sensor_cfg["sensors"],
+                        default=current_assignment,
+                        key=f"chan_sensor_{selected_volume}_{selected_arrangement}_{chan_key}",
+                        help="Leave empty to have every active sensor control this channel."
+                    )
+                    if set(new_assignment) != set(current_assignment):
+                        cab_sensor_cfg["channel_sensor_map"][chan_key] = new_assignment
+                        assignment_changed = True
+                if assignment_changed:
+                    save_memory_to_disk(st.session_state.db)
+
+    st.markdown("---")
+
     repo_c1, repo_c2 = st.columns(2)
     with repo_c1:
         repo_p_ambient = st.selectbox("Source Pulldown File Ambient Layer:", ["32°C", "43°C"], key="repo_p_amb")

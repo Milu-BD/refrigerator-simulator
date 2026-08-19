@@ -1560,6 +1560,38 @@
             "43C": {
                 "32C": [],
                 "16C": []
+            },
+            "_config": {
+                "cabinets": [
+                    {
+                        "name": "FC",
+                        "prefix": "tf",
+                        "count": 5,
+                        "enabled": true
+                    },
+                    {
+                        "name": "CC",
+                        "prefix": "tcc",
+                        "count": 3,
+                        "enabled": true
+                    },
+                    {
+                        "name": "PC",
+                        "prefix": "tc",
+                        "count": 3,
+                        "enabled": true
+                    },
+                    {
+                        "name": "VC",
+                        "prefix": "tvc",
+                        "count": 3,
+                        "enabled": false
+                    }
+                ],
+                "sensors": [
+                    "Sensor-1"
+                ],
+                "channel_sensor_map": {}
             }
         }
     },

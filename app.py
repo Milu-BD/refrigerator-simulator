@@ -147,6 +147,39 @@ def find_sensor_reading(sheet_data):
         if "sensor" in lbl:
             return val
     return None
+
+# Scans an openpyxl worksheet for a cell whose text matches one of label_variants
+# (case-insensitive, whitespace-trimmed — e.g. "Entry Code" / "entry code" / "ENTRY CODE"
+# all match), then looks nearby for a value starting with value_prefix — first scanning
+# a few cells to the right in the same row, then a few rows below in the same column.
+# The small scan window (rather than only the single adjacent cell) makes this tolerant
+# of report layouts that leave a blank gap cell between a label and its value.
+def find_labeled_value(ws, label_variants, value_prefix, max_right=6, max_down=4, max_scan_rows=60, max_scan_cols=30):
+    targets = [v.strip().lower() for v in label_variants]
+    prefix = value_prefix.strip().upper()
+
+    for r in range(1, max_scan_rows + 1):
+        for c in range(1, max_scan_cols + 1):
+            cell_val = ws.cell(r, c).value
+            if cell_val is None or not isinstance(cell_val, str):
+                continue
+            if cell_val.strip().lower() not in targets:
+                continue
+
+            # Look right, in the same row, within a small window
+            for dc in range(1, max_right + 1):
+                right_val = ws.cell(r, c + dc).value
+                if right_val is not None and str(right_val).strip().upper().startswith(prefix):
+                    return str(right_val).strip()
+
+            # Look below, in the same column, within a small window
+            for dr in range(1, max_down + 1):
+                below_val = ws.cell(r + dr, c).value
+                if below_val is not None and str(below_val).strip().upper().startswith(prefix):
+                    return str(below_val).strip()
+
+    return None
+
 def to_float(v):
     try:
         if pd.isna(v) or str(v).strip() == "":
@@ -1127,6 +1160,24 @@ with tab2:
                     
                 # None (not 0.0) when the file has no "Sensor" row — 0.0 could be a real reading
                 resolved_sensor = find_sensor_reading(sheet_data)
+
+                # Entry Code / Test ID — extracted independently of which CPT row-parsing
+                # strategy below ends up succeeding, since this only needs the raw header
+                # cells, not the data table. Best-effort: failures here never block the rest
+                # of the upload.
+                entry_code = None
+                test_id = None
+                try:
+                    import openpyxl as _openpyxl_meta
+                    repo_cpt_file.seek(0)
+                    _wb_meta = _openpyxl_meta.load_workbook(repo_cpt_file, data_only=True)
+                    _ws_meta = _wb_meta[_wb_meta.sheetnames[0]]
+                    entry_code = find_labeled_value(_ws_meta, ["entry code"], "F-")
+                    test_id = find_labeled_value(_ws_meta, ["test id"], "R0")
+                except Exception:
+                    pass
+                finally:
+                    repo_cpt_file.seek(0)  # rewind so the strategies below read from the start
                 
                 # 2. PARSE CPT DATA
                 cpt_structured = {}
@@ -1336,6 +1387,8 @@ with tab2:
                 new_block = {
                     "pulldown_baseline_sensor": resolved_sensor,
                     "original_pulldown_baseline_sensor": resolved_sensor,
+                    "entry_code": entry_code,
+                    "test_id": test_id,
                     "original_pulldown_data": copy.deepcopy(p_extracted),
                     "original_cpt_data": copy.deepcopy(cpt_structured),
                     "pulldown_data": copy.deepcopy(p_extracted),
@@ -1419,7 +1472,11 @@ with tab3:
             
         # --- LOOP THROUGH AND RENDER EACH TRAINED DATASET ---
             for run_idx, record in enumerate(records):
-                with st.expander(f"📦 Trained Dataset Record #{run_idx + 1}", expanded=(run_idx == 0)):
+                _entry_code_display = record.get('entry_code')
+                _expander_title = f"📦 Trained Dataset Record #{run_idx + 1}"
+                if _entry_code_display:
+                    _expander_title += f" — {_entry_code_display}"
+                with st.expander(_expander_title, expanded=(run_idx == 0)):
                     
                     # Row management buttons
                     c_btn1, c_btn2 = st.columns([4, 1])
@@ -1427,6 +1484,8 @@ with tab3:
                         _baseline_sensor_display = record.get('pulldown_baseline_sensor')
                         _baseline_sensor_text = "No data" if _baseline_sensor_display is None else f"{_baseline_sensor_display}°C"
                         st.markdown(f"**Baseline Sensor Target Setting:** `{_baseline_sensor_text}`")
+                        _test_id_display = record.get('test_id')
+                        st.caption(f"Entry Code: `{_entry_code_display or 'Not found'}`  |  Test ID: `{_test_id_display or 'Not found'}`")
                     with c_btn2:
                         if st.button("🗑️ Delete Dataset", key=f"del_ds_{p_inspect_key}_{c_inspect_key}_{run_idx}"):
                             records.pop(run_idx)

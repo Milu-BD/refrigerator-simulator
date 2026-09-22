@@ -1,9 +1,11 @@
 import json
 import os
+import re
 import base64
 import numpy as np
 import pandas as pd
 import requests
+import openpyxl
 from sklearn.neighbors import KNeighborsRegressor
 import streamlit as st
 import copy
@@ -179,6 +181,132 @@ def find_labeled_value(ws, label_variants, value_prefix, max_right=6, max_down=4
                     return str(below_val).strip()
 
     return None
+
+# Finds a token starting with `prefix` inside a piece of free text (typically a filename
+# like "PCT-2_Report_307L_F-12043_R029809.xlsx"), splitting on common separators.
+# Strips a trailing file extension if the matched token happens to carry one.
+def find_prefixed_token_in_text(text, prefix):
+    if not text:
+        return None
+    prefix_upper = prefix.strip().upper()
+    tokens = re.split(r'[_\s]+', text)
+    for tok in tokens:
+        tok_clean = tok.strip()
+        if tok_clean.upper().startswith(prefix_upper):
+            tok_clean = re.sub(r'\.(xlsx|xlsm|xls)$', '', tok_clean, flags=re.IGNORECASE)
+            return tok_clean
+    return None
+
+# Fallback: scans every cell of a worksheet for any value starting with `prefix`,
+# with no label required nearby. Used when a value isn't findable via the filename.
+def find_prefixed_cell_value(ws, prefix, max_scan_rows=80, max_scan_cols=30):
+    prefix_upper = prefix.strip().upper()
+    for r in range(1, max_scan_rows + 1):
+        for c in range(1, max_scan_cols + 1):
+            v = ws.cell(r, c).value
+            if v is not None and str(v).strip().upper().startswith(prefix_upper):
+                return str(v).strip()
+    return None
+
+# Combined extractor for a Pulldown file: tries the filename first (most reliable for
+# this report style), then falls back to scanning the first sheet's cells.
+def extract_pulldown_entry_test_id(uploaded_file):
+    entry_code = find_prefixed_token_in_text(getattr(uploaded_file, "name", None), "F-")
+    test_id = find_prefixed_token_in_text(getattr(uploaded_file, "name", None), "R0")
+    if entry_code is None or test_id is None:
+        try:
+            uploaded_file.seek(0)
+            _wb = openpyxl.load_workbook(uploaded_file, data_only=True)
+            _ws = _wb[_wb.sheetnames[0]]
+            if entry_code is None:
+                entry_code = find_prefixed_cell_value(_ws, "F-")
+            if test_id is None:
+                test_id = find_prefixed_cell_value(_ws, "R0")
+        except Exception:
+            pass
+        finally:
+            uploaded_file.seek(0)
+    return entry_code, test_id
+
+# Scans an elaborated Pulldown report (channel names in column A, a header row with
+# Avg/Min/Max plus any number of named checkpoint columns like "tfa: -6.0", "tca: 8.0",
+# or "Hr: 0.5") and returns {checkpoint_name: {channel_key: value}}. Returns {} for
+# simple 2-column or Summary-style files with no such header — those keep working
+# through the existing Avg-only baseline path, unaffected.
+#
+# A checkpoint column is any header cell containing a colon, other than the bare
+# "avg"/"min"/"max" labels — this makes the checkpoint set fully dynamic. Files can
+# have more, fewer, or differently-named checkpoints (e.g. a future "tvca: 5.0")
+# with no code change needed here.
+def extract_pulldown_checkpoints(uploaded_file):
+    try:
+        uploaded_file.seek(0)
+        wb = openpyxl.load_workbook(uploaded_file, data_only=True)
+        ws = wb[wb.sheetnames[0]]
+    except Exception:
+        return {}
+    finally:
+        try:
+            uploaded_file.seek(0)
+        except Exception:
+            pass
+
+    # Find the header row: the one row containing both a literal "avg" and "min" cell
+    header_row = None
+    checkpoint_cols = {}
+    for r in range(1, min(ws.max_row, 60) + 1):
+        row_texts = {}
+        for c in range(1, min(ws.max_column, 40) + 1):
+            v = ws.cell(r, c).value
+            if isinstance(v, str) and v.strip():
+                row_texts[c] = v.strip()
+        lowered = {c: t.lower() for c, t in row_texts.items()}
+        if any(t == "avg" for t in lowered.values()) and any(t == "min" for t in lowered.values()):
+            header_row = r
+            for c, t in row_texts.items():
+                if ":" in t:
+                    checkpoint_cols[c] = t
+            break
+
+    if header_row is None or not checkpoint_cols:
+        return {}
+
+    # Collect each channel's value under every checkpoint column, using the same
+    # channel-name normalization the rest of the app already uses
+    raw_checkpoints = {}
+    for r in range(header_row + 1, min(ws.max_row, header_row + 60) + 1):
+        chan_raw = ws.cell(r, 1).value
+        if chan_raw is None or not isinstance(chan_raw, str) or not chan_raw.strip():
+            continue
+        chan_norm = normalize_sensor_name(chan_raw)
+        for col_idx, cp_name in checkpoint_cols.items():
+            val = ws.cell(r, col_idx).value
+            if val is None:
+                continue
+            try:
+                val_f = round(float(val), 1)
+            except (ValueError, TypeError):
+                continue
+            raw_checkpoints.setdefault(cp_name, {})[chan_norm] = val_f
+
+    # Translate normalized channel names (tf1, tc1, tvc1...) into the app's standard
+    # keys (tf-1, tc-1, tvc), same mapping used for the baseline Avg extraction
+    mapping_keys = {
+        'tf-1': 'tf1', 'tf-2': 'tf2', 'tf-3': 'tf3', 'tf-4': 'tf4', 'tf-5': 'tf5',
+        'tc-1': 'tc1', 'tc-2': 'tc2', 'tc-3': 'tc3', 'S2': 's2'
+    }
+    result = {}
+    for cp_name, chan_vals in raw_checkpoints.items():
+        entry = {}
+        for target_key, norm_label in mapping_keys.items():
+            if norm_label in chan_vals:
+                entry[target_key] = chan_vals[norm_label]
+        tvc_vals = [chan_vals[l] for l in ['tvc1', 'tvc2', 'tvc3'] if l in chan_vals]
+        if tvc_vals:
+            entry['tvc'] = round(sum(tvc_vals) / len(tvc_vals), 1)
+        if entry:  # only keep checkpoints that yielded at least one recognized channel
+            result[cp_name] = entry
+    return result
 
 def to_float(v):
     try:
@@ -850,6 +978,12 @@ with tab1:
                 else:
                     st.session_state.active_pulldown_form.pop('Sensor', None)
 
+                # Entry Code / Test ID — purely informational here (Tab 1 doesn't persist
+                # records), so the person can visually confirm they uploaded the right file.
+                _sim_entry_code, _sim_test_id = extract_pulldown_entry_test_id(sim_pulldown_file)
+                st.session_state.active_pulldown_form['_entry_code'] = _sim_entry_code
+                st.session_state.active_pulldown_form['_test_id'] = _sim_test_id
+
                 st.session_state.last_uploaded_sim_file = sim_pulldown_file
                 # Increment key version to instantly clear old component cache and force update UI inputs
                 st.session_state.sim_ver += 1
@@ -857,6 +991,12 @@ with tab1:
                 st.rerun()
             except Exception as e:
                 st.error(f"Error parsing configuration: {str(e)}")
+
+        if st.session_state.active_pulldown_form.get('_entry_code') or st.session_state.active_pulldown_form.get('_test_id'):
+            st.caption(
+                f"📄 Entry Code: `{st.session_state.active_pulldown_form.get('_entry_code') or 'Not found'}`  |  "
+                f"Test ID: `{st.session_state.active_pulldown_form.get('_test_id') or 'Not found'}`"
+            )
 
         u_cols = st.columns(10)
         new_pulldown_input = []
@@ -1161,16 +1301,26 @@ with tab2:
                 # None (not 0.0) when the file has no "Sensor" row — 0.0 could be a real reading
                 resolved_sensor = find_sensor_reading(sheet_data)
 
-                # Entry Code / Test ID — extracted independently of which CPT row-parsing
-                # strategy below ends up succeeding, since this only needs the raw header
-                # cells, not the data table. Best-effort: failures here never block the rest
-                # of the upload.
+                # Optional richer data: named checkpoint columns (e.g. "tfa: -6.0",
+                # "tca: 8.0") found in elaborated Pulldown report formats. Empty {} for
+                # simple/Summary-style files — the baseline Avg-only path above is
+                # unaffected either way.
+                pulldown_checkpoints = extract_pulldown_checkpoints(repo_pulldown_file)
+
+                # Entry Code / Test ID from the Pulldown file — typically embedded in its
+                # filename (e.g. "PCT-2_Report_307L_F-12043_R029809.xlsx"), with a cell-scan
+                # fallback for report styles that might embed it in a cell instead.
+                pulldown_entry_code, pulldown_test_id = extract_pulldown_entry_test_id(repo_pulldown_file)
+
+                # Entry Code / Test ID from the CPT file — extracted independently of which
+                # CPT row-parsing strategy below ends up succeeding, since this only needs
+                # the raw header cells, not the data table. Best-effort: failures here never
+                # block the rest of the upload.
                 entry_code = None
                 test_id = None
                 try:
-                    import openpyxl as _openpyxl_meta
                     repo_cpt_file.seek(0)
-                    _wb_meta = _openpyxl_meta.load_workbook(repo_cpt_file, data_only=True)
+                    _wb_meta = openpyxl.load_workbook(repo_cpt_file, data_only=True)
                     _ws_meta = _wb_meta[_wb_meta.sheetnames[0]]
                     entry_code = find_labeled_value(_ws_meta, ["entry code"], "F-")
                     test_id = find_labeled_value(_ws_meta, ["test id"], "R0")
@@ -1178,6 +1328,20 @@ with tab2:
                     pass
                 finally:
                     repo_cpt_file.seek(0)  # rewind so the strategies below read from the start
+
+                # Cross-check: the Pulldown and CPT files should describe the same test run.
+                # Prefer the CPT-side value when both are found and agree; warn if they disagree
+                # (likely mismatched files uploaded together by mistake), and fall back to
+                # whichever single source found a value if the other didn't find one at all.
+                if entry_code and pulldown_entry_code and entry_code.upper() != pulldown_entry_code.upper():
+                    st.warning(f"⚠️ Entry Code mismatch: CPT file says '{entry_code}', Pulldown file says '{pulldown_entry_code}'. Double-check you uploaded matching files.")
+                elif not entry_code:
+                    entry_code = pulldown_entry_code
+
+                if test_id and pulldown_test_id and test_id.upper() != pulldown_test_id.upper():
+                    st.warning(f"⚠️ Test ID mismatch: CPT file says '{test_id}', Pulldown file says '{pulldown_test_id}'. Double-check you uploaded matching files.")
+                elif not test_id:
+                    test_id = pulldown_test_id
                 
                 # 2. PARSE CPT DATA
                 cpt_structured = {}
@@ -1389,6 +1553,7 @@ with tab2:
                     "original_pulldown_baseline_sensor": resolved_sensor,
                     "entry_code": entry_code,
                     "test_id": test_id,
+                    "pulldown_checkpoints": copy.deepcopy(pulldown_checkpoints),
                     "original_pulldown_data": copy.deepcopy(p_extracted),
                     "original_cpt_data": copy.deepcopy(cpt_structured),
                     "pulldown_data": copy.deepcopy(p_extracted),
@@ -1405,6 +1570,8 @@ with tab2:
                 st.session_state.cpt_file_key += 1
                 
                 st.success(f"🚀 Model Simulator Trained successfully! Hard-Backup saved to storage.")
+                if pulldown_checkpoints:
+                    st.info(f"📍 Also captured {len(pulldown_checkpoints)} named checkpoint(s) from the Pulldown file: {', '.join(pulldown_checkpoints.keys())}")
                 st.rerun()
             except Exception:
                 import traceback

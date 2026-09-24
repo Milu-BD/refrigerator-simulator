@@ -1603,6 +1603,44 @@
         }
     },
     "560L": {
-        "A1": {}
+        "A1": {
+            "32C": {
+                "16C": [],
+                "32C": []
+            },
+            "_config": {
+                "cabinets": [
+                    {
+                        "name": "FC",
+                        "prefix": "tf",
+                        "count": 5,
+                        "enabled": true
+                    },
+                    {
+                        "name": "CC",
+                        "prefix": "tcc",
+                        "count": 3,
+                        "enabled": true
+                    },
+                    {
+                        "name": "PC",
+                        "prefix": "tc",
+                        "count": 3,
+                        "enabled": true
+                    },
+                    {
+                        "name": "VC",
+                        "prefix": "tvc",
+                        "count": 3,
+                        "enabled": true
+                    }
+                ],
+                "sensors": [
+                    "Sensor-1",
+                    "Sensor-2"
+                ],
+                "channel_sensor_map": {}
+            }
+        }
     }
 }

@@ -661,9 +661,101 @@ def all_channel_keys(cabinet_config):
             keys.append(f"{cab['prefix']}-{i}")
     return keys
 
+# Extracts every enabled cabinet's channel values from a parsed {normalized_label: value}
+# pulldown dict, driven entirely by Cabinet Configuration (not a fixed field list).
+# For each cabinet (prefix P, count N):
+#   1. Fill slots P-1..P-N using exact numeric matches ("p1", "p2", ...) in sheet_data.
+#   2. Any slots still unfilled are filled, in file order, from OTHER sheet_data keys
+#      that start with prefix P but weren't already claimed — this is what lets a
+#      non-numeric channel name like "tf Box" (normalized "tfbox") count as an extra
+#      FC thermocouple when the configured count exceeds the numbered ones found.
+# sheet_labels (optional) maps normalized_label -> original file text (e.g.
+# "tfbox" -> "tf Box"), used to report which physical channel a fallback slot came
+# from — without this, assigning two extras (e.g. "tf Box" and "tf Pocket") to tf-6
+# and tf-7 would leave no way to tell which number means which sensor.
+# Returns (channel_values, notifications, slot_labels):
+#   channel_values — {"tf-1": ..., ...} for every matched slot across every cabinet
+#   notifications  — human-readable warnings for any partial/total match failure
+#   slot_labels    — {"tf-6": "tf Box", ...} original text for fallback-matched slots
+#                     only (numeric matches like tf-1..tf-5 are unambiguous already)
+def extract_cabinet_channels(sheet_data, cabinet_config, sheet_labels=None):
+    sheet_labels = sheet_labels or {}
+    channel_values = {}
+    notifications = []
+    slot_labels = {}
+    sheet_keys_in_order = list(sheet_data.keys())  # dict preserves file row order
+
+    for cab in cabinet_config["cabinets"]:
+        if not cab.get("enabled", True):
+            continue
+        prefix = cab["prefix"]
+        count = int(cab.get("count", 0))
+        if count <= 0:
+            continue
+
+        claimed_keys = set()
+        filled = {}
+        filled_from_fallback = {}
+
+        # Step 1: exact numeric matches (tf1, tf2, ...)
+        for i in range(1, count + 1):
+            numeric_key = f"{prefix}{i}"
+            if numeric_key in sheet_data:
+                filled[i] = sheet_data[numeric_key]
+                claimed_keys.add(numeric_key)
+
+        # Step 2: fill remaining slots from other prefix-matching, unclaimed keys,
+        # in the order they appear in the file (e.g. "tf box" -> "tfbox")
+        missing_slots = [i for i in range(1, count + 1) if i not in filled]
+        if missing_slots:
+            leftover_candidates = [
+                k for k in sheet_keys_in_order
+                if k.startswith(prefix) and k not in claimed_keys
+            ]
+            for slot, cand_key in zip(missing_slots, leftover_candidates):
+                filled[slot] = sheet_data[cand_key]
+                filled_from_fallback[slot] = cand_key
+                claimed_keys.add(cand_key)
+
+        matched_count = len(filled)
+        fallback_descriptions = []
+        for i in range(1, count + 1):
+            if i in filled:
+                slot_key = f"{prefix}-{i}"
+                channel_values[slot_key] = filled[i]
+                if i in filled_from_fallback:
+                    original_text = sheet_labels.get(filled_from_fallback[i], filled_from_fallback[i])
+                    slot_labels[slot_key] = original_text
+                    fallback_descriptions.append(f"{slot_key} = \"{original_text}\"")
+
+        if matched_count == 0:
+            notifications.append(f"⚠️ No thermocouples found for cabinet '{cab['name']}' — this cabinet's data was not collected.")
+        else:
+            if matched_count < count:
+                notifications.append(f"⚠️ Only {matched_count} of {count} thermocouples found for cabinet '{cab['name']}' — using the {matched_count} found.")
+            if fallback_descriptions:
+                notifications.append(f"ℹ️ Cabinet '{cab['name']}' extra channel mapping: {', '.join(fallback_descriptions)}")
+
+    return channel_values, notifications, slot_labels
+
+# Computes each enabled cabinet's own average (e.g. "tf-a", "tc-a", "tvc-a") from
+# whichever channel_values slots actually got filled — never a fixed 5/3 count.
+# Returns {"tf-a": ..., ...} for every cabinet that had at least one matched channel.
+def compute_cabinet_averages(channel_values, cabinet_config):
+    averages = {}
+    for cab in cabinet_config["cabinets"]:
+        if not cab.get("enabled", True):
+            continue
+        prefix = cab["prefix"]
+        count = int(cab.get("count", 0))
+        vals = [channel_values[f"{prefix}-{i}"] for i in range(1, count + 1) if f"{prefix}-{i}" in channel_values]
+        if vals:
+            averages[f"{prefix}-a"] = round(sum(vals) / len(vals), 1)
+    return averages
+
 
 # =================================================================
-def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, target_sensor_pairs):
+def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, target_sensor_pairs, pulldown_feature_keys):
     """
     Generates a consolidated prediction dataframe where each Sensor Query Point produces
     4 rows — Mean, Min, Max, (Max+Min)/2 — each predicted from that criteria's historical
@@ -674,6 +766,14 @@ def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, targ
         Min row          -> Sensor Min reading
         Max row          -> Sensor Max reading
         Mean / (Max+Min)/2 -> average of Sensor Min and Sensor Max
+
+    `pulldown_feature_keys` is the ordered list of pulldown channel keys (e.g.
+    ["tf-1",...,"tf-6","tc-1","tc-2","tc-3","tvc-1","tvc-2","tvc-3","S2"]) driven by
+    Cabinet Configuration — both `new_pulldown` (the live query) and each historical
+    record's pulldown_data are read using this same list, so their lengths always
+    match. For older records saved before a cabinet went multi-channel (e.g. a
+    legacy single "tvc" value instead of "tvc-1/2/3"), that legacy value is reused
+    for every slot of that cabinet as a reasonable stand-in.
     """
     if not volume_records:
         return pd.DataFrame()
@@ -685,6 +785,17 @@ def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, targ
             return float(v)
         except (ValueError, TypeError):
             return 0.0
+
+    def get_pulldown_feature_value(pulldown_data, key):
+        if key in pulldown_data:
+            return pulldown_data[key]
+        # Legacy fallback: a record saved before a cabinet went multi-channel may only
+        # have a bare "tvc" (no "-N") — reuse it for every slot of that cabinet.
+        if '-' in key:
+            legacy_key = key.rsplit('-', 1)[0]
+            if legacy_key in pulldown_data:
+                return pulldown_data[legacy_key]
+        return 0.0
 
     # Rough per-level fallback when a historical Sensor reading is missing/zero — the same
     # heuristic used elsewhere in this app, with a small offset for the Max variant so it
@@ -723,8 +834,9 @@ def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, targ
                 if 'cpt_data' not in record or not record['cpt_data']:
                     continue
 
-                # Pulldown base features (unchanged — pulldown telemetry is still one flat vector)
-                p_features = [clean_val(record["pulldown_data"].get(f, 0.0)) for f in tc_features]
+                # Pulldown base features — dynamic per Cabinet Configuration, with a
+                # legacy-value fallback for older records saved before this system existed
+                p_features = [clean_val(get_pulldown_feature_value(record["pulldown_data"], f)) for f in pulldown_feature_keys]
                 p_baseline = clean_val(record.get("pulldown_baseline_sensor", 0.0))
 
                 # Treat each flag/level as a distinct data point to capture variance across sensor points
@@ -938,10 +1050,12 @@ with tab1:
             try:
                 # Read first available sheet dynamically
                 df_sim_p = pd.read_excel(sim_pulldown_file, sheet_name=0, header=None)
-                df_sim_p[0] = df_sim_p[0].astype(str).apply(normalize_sensor_name)
+                raw_labels_sim = df_sim_p[0].astype(str)
+                df_sim_p[0] = raw_labels_sim.apply(normalize_sensor_name)
                 
                 sheet_data = {}
-                for _, row in df_sim_p.dropna(subset=[0]).iterrows():
+                sheet_labels = {}  # normalized key -> original text (e.g. "tfbox" -> "tf Box")
+                for idx, row in df_sim_p.dropna(subset=[0]).iterrows():
                     lbl = row[0]
                     if lbl not in sheet_data:
                         try:
@@ -949,27 +1063,26 @@ with tab1:
                             if pd.isna(parsed_val):
                                 continue  # blank cell — don't treat as a found value
                             sheet_data[lbl] = round(parsed_val, 1)
+                            sheet_labels[lbl] = raw_labels_sim.loc[idx].strip()
                         except (ValueError, TypeError):
                             continue
 
-                mapping_keys = {
-                    'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
-                    'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'S2':'s2'
-                }
-                
-                # Extract individual thermocouple cells
-                for feat, normalized_label in mapping_keys.items():
-                    if normalized_label in sheet_data:
-                        st.session_state.active_pulldown_form[feat] = sheet_data[normalized_label]
-                        
-                # Compute average for tvc from subcomponents if available
-                tvc_values = [sheet_data[lbl] for lbl in ['tvc1', 'tvc2', 'tvc3'] if lbl in sheet_data]
-                if tvc_values:
-                    st.session_state.active_pulldown_form['tvc'] = round(sum(tvc_values) / len(tvc_values), 1)
-                elif 'tvc' in sheet_data:
-                    st.session_state.active_pulldown_form['tvc'] = sheet_data['tvc']
+                # Extract every enabled cabinet's channels, driven by Cabinet Configuration
+                # (not a fixed field list) — this is what lets a non-numeric channel like
+                # "tf Box" count as an extra thermocouple when a cabinet's configured count
+                # exceeds the plain numbered ones found in the file.
+                _sim_cab_cfg = get_cabinet_sensor_config(selected_volume, selected_arrangement)
+                _sim_channel_values, _sim_cab_notifications, _sim_slot_labels = extract_cabinet_channels(sheet_data, _sim_cab_cfg, sheet_labels)
+                st.session_state.active_pulldown_form.update(_sim_channel_values)
+                st.session_state.active_pulldown_form.update(compute_cabinet_averages(_sim_channel_values, _sim_cab_cfg))
+                st.session_state.active_pulldown_form['_cabinet_notifications'] = _sim_cab_notifications
+                st.session_state.active_pulldown_form['_slot_labels'] = _sim_slot_labels
 
-                # Sensor is tracked separately from the 10 tc_features — only set if the
+                # S2 is not part of the cabinet system — same handling as always
+                if 's2' in sheet_data:
+                    st.session_state.active_pulldown_form['S2'] = sheet_data['s2']
+
+                # Sensor is tracked separately from the cabinet channels — only set if the
                 # uploaded file actually has a "Sensor" reading; otherwise leave it absent
                 # so the field shows empty/highlighted rather than a fabricated number
                 found_sensor = find_sensor_reading(sheet_data)
@@ -998,26 +1111,43 @@ with tab1:
                 f"Test ID: `{st.session_state.active_pulldown_form.get('_test_id') or 'Not found'}`"
             )
 
-        u_cols = st.columns(10)
+        # Dynamic channel list, driven entirely by Cabinet Configuration — this is both
+        # the set of input boxes shown below AND the exact order run_automated_simulation
+        # will use to build the live query vector, so the two always stay in sync.
+        cab_sensor_cfg = get_cabinet_sensor_config(selected_volume, selected_arrangement)
+        pulldown_feature_keys = all_channel_keys(cab_sensor_cfg) + ['S2']
+
+        _cab_notifications = st.session_state.active_pulldown_form.get('_cabinet_notifications', [])
+        for _note in _cab_notifications:
+            st.caption(_note)
+
+        _slot_labels = st.session_state.active_pulldown_form.get('_slot_labels', {})
+        default_defaults = {'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 'tc-2': 1.6, 'tc-3': 0.5, 'S2': 41.1}
+
         new_pulldown_input = []
-        default_defaults = {'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 'tc-2': 1.6, 'tc-3': 0.5, 'tvc': 8.1, 'S2': 41.1}
-        
-        for i, feat in enumerate(tc_features):
-            # Prioritize extracted file data if available, otherwise use defaults
-            if feat in st.session_state.active_pulldown_form:
-                curr_val = round(float(st.session_state.active_pulldown_form[feat]), 1)
-            else:
-                curr_val = default_defaults.get(feat, 0.0)
-                
-            # Bound dynamic widget version to key parameters to force a redraw when new files parse
-            val = u_cols[i].number_input(
-                f"{feat}:", 
-                value=curr_val, 
-                step=0.1,
-                format="%.1f",
-                key=f"sim_inp_{p_key}_{c_key}_{feat}_v{st.session_state.sim_ver}"
-            )
-            new_pulldown_input.append(val)
+        CHUNK_SIZE = 8
+        for chunk_start in range(0, len(pulldown_feature_keys), CHUNK_SIZE):
+            chunk = pulldown_feature_keys[chunk_start:chunk_start + CHUNK_SIZE]
+            u_cols = st.columns(len(chunk))
+            for col, feat in zip(u_cols, chunk):
+                # Prioritize extracted file data if available, otherwise use defaults
+                if feat in st.session_state.active_pulldown_form:
+                    curr_val = round(float(st.session_state.active_pulldown_form[feat]), 1)
+                else:
+                    curr_val = default_defaults.get(feat, 0.0)
+
+                # Show which physical channel a fallback-matched slot (e.g. "tf Box") came from
+                label = f"{feat} ({_slot_labels[feat]}):" if feat in _slot_labels else f"{feat}:"
+
+                # Bound dynamic widget version to key parameters to force a redraw when new files parse
+                val = col.number_input(
+                    label,
+                    value=curr_val,
+                    step=0.1,
+                    format="%.1f",
+                    key=f"sim_inp_{p_key}_{c_key}_{feat}_v{st.session_state.sim_ver}"
+                )
+                new_pulldown_input.append(val)
 
         # Sensor is a genuinely distinct reading (from the pulldown file's own "Sensor" row),
         # kept separate from the 10 fields above. Same behavior as tf-1..S2: auto-filled and
@@ -1104,7 +1234,7 @@ with tab1:
             if new_pulldown_sensor is None:
                 st.warning("⚠️ Sensor value is empty — predictions will be generated using 0.0 °C for the Pulldown Sensor feature, which may reduce accuracy.")
             with st.spinner("Processing automated interpolation runs..."):
-                df_final_predictions = run_automated_simulation(vol_records, new_pulldown_input, new_pulldown_sensor, target_sensor_pairs)
+                df_final_predictions = run_automated_simulation(vol_records, new_pulldown_input, new_pulldown_sensor, target_sensor_pairs, pulldown_feature_keys)
                 
                 if df_final_predictions.empty:
                     st.error("Simulation engine run failed. Make sure dataset memory contains recorded instances.")

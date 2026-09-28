@@ -1636,6 +1636,9 @@
                 "channel_sensor_map": {
                     "tf-1": [
                         "Sensor FC"
+                    ],
+                    "tf-2": [
+                        "Sensor FC"
                     ]
                 }
             }

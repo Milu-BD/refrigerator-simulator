@@ -1632,7 +1632,8 @@
                 "sensors": [
                     "Sensor-1",
                     "Sensor-2",
-                    "Sensor FC"
+                    "Sensor FC",
+                    "Sensor PC"
                 ],
                 "channel_sensor_map": {}
             }

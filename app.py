@@ -653,16 +653,17 @@ def derive_cabinet_prefix(name):
 def default_cabinet_sensor_config():
     return {
         "cabinets": [
-            {"name": "FC", "prefix": "tf", "count": 5, "enabled": True},
-            {"name": "CC", "prefix": "tcc", "count": 3, "enabled": True},
-            {"name": "PC", "prefix": "tc", "count": 3, "enabled": True},
-            {"name": "VC", "prefix": "tvc", "count": 3, "enabled": True},
+            {"name": "FC", "prefix": "tf", "count": 5},
+            {"name": "CC", "prefix": "tcc", "count": 3},
+            {"name": "PC", "prefix": "tc", "count": 3},
+            {"name": "VC", "prefix": "tvc", "count": 3},
         ],
         "sensors": ["Sensor-1"],
-        # Which sensors control which channel key (e.g. "tf-1"). A channel absent from this
-        # map, or mapped to an empty list, is treated as controlled by every active sensor —
-        # same rule as S2, which never appears here at all since it has no cabinet checkbox.
-        "channel_sensor_map": {},
+        # Which sensors control which CABINET (keyed by cabinet name, e.g. "FC"); a sensor
+        # assigned to a cabinet controls every thermocouple in it. A cabinet absent from
+        # this map, or mapped to an empty list, is treated as controlled by every sensor —
+        # same rule as S2, which never appears here at all.
+        "cabinet_sensor_map": {},
     }
 
 def get_cabinet_sensor_config(vol, arr_name):
@@ -677,19 +678,38 @@ def get_cabinet_sensor_config(vol, arr_name):
     # Backfill any missing keys for configs saved by an older version of this app
     cfg.setdefault("cabinets", default_cabinet_sensor_config()["cabinets"])
     cfg.setdefault("sensors", ["Sensor-1"])
-    cfg.setdefault("channel_sensor_map", {})
+    cfg.setdefault("cabinet_sensor_map", {})
+    # Migrate the old per-thermocouple assignments (channel_sensor_map) to per-cabinet:
+    # a cabinet keeps its selection only if every thermocouple in it that had one agreed
+    # on the same sensors. Mixed selections can't be represented per cabinet, so those
+    # cabinets go back to "all sensors". The old key is then dropped.
+    old_map = cfg.pop("channel_sensor_map", None)
+    if old_map:
+        for cab in cfg["cabinets"]:
+            chan_sets = [
+                frozenset(old_map[f"{cab['prefix']}-{i}"])
+                for i in range(1, int(cab.get("count", 0)) + 1)
+                if old_map.get(f"{cab['prefix']}-{i}")
+            ]
+            if chan_sets and len(set(chan_sets)) == 1 and cab["name"] not in cfg["cabinet_sensor_map"]:
+                cfg["cabinet_sensor_map"][cab["name"]] = sorted(chan_sets[0])
+    # The per-cabinet on/off tick was removed: every listed cabinet is always active.
+    # Drop any stale "enabled" flag saved by an older version, so a cabinet that was
+    # once unticked doesn't stay silently inactive with no way to turn it back on.
+    for cab in cfg["cabinets"]:
+        cab.pop("enabled", None)
     return cfg
 
 def all_channel_keys(cabinet_config):
     """Flat list of every channel key (e.g. 'tf-1', 'tf-2', ...) across all cabinets,
-    regardless of enabled state — used to build the sensor-assignment checklist."""
+    across every listed cabinet — used to build the sensor-assignment checklist."""
     keys = []
     for cab in cabinet_config["cabinets"]:
         for i in range(1, int(cab.get("count", 0)) + 1):
             keys.append(f"{cab['prefix']}-{i}")
     return keys
 
-# Extracts every enabled cabinet's channel values from a parsed {normalized_label: value}
+# Extracts every cabinet's channel values from a parsed {normalized_label: value}
 # pulldown dict, driven entirely by Cabinet Configuration (not a fixed field list).
 # For each cabinet (prefix P, count N):
 #   1. Fill slots P-1..P-N using exact numeric matches ("p1", "p2", ...) in sheet_data.
@@ -713,7 +733,7 @@ def extract_cabinet_channels(sheet_data, cabinet_config, sheet_labels=None):
     slot_labels = {}
     sheet_keys_in_order = list(sheet_data.keys())  # dict preserves file row order
 
-    enabled_cabs = [c for c in cabinet_config["cabinets"] if c.get("enabled", True) and int(c.get("count", 0)) > 0]
+    active_cabs = [c for c in cabinet_config["cabinets"] if int(c.get("count", 0)) > 0]
 
     # Claimed keys are GLOBAL across all cabinets in this call, so the same file key
     # (e.g. "tcc1") can never be double-counted toward two different cabinets.
@@ -723,7 +743,7 @@ def extract_cabinet_channels(sheet_data, cabinet_config, sheet_labels=None):
     # Cabinet) claims its matches before a shorter one (e.g. "tc" for PC) gets a
     # chance to mistake "tcc1" for one of its own leftover candidates.
     results_by_cab = {}
-    for cab in sorted(enabled_cabs, key=lambda c: -len(c["prefix"])):
+    for cab in sorted(active_cabs, key=lambda c: -len(c["prefix"])):
         prefix = cab["prefix"]
         count = int(cab.get("count", 0))
 
@@ -739,10 +759,10 @@ def extract_cabinet_channels(sheet_data, cabinet_config, sheet_labels=None):
 
         # Step 2: fill remaining slots from other prefix-matching, unclaimed keys,
         # in the order they appear in the file (e.g. "tf box" -> "tfbox"). A
-        # candidate is skipped if it starts with another enabled cabinet's LONGER
+        # candidate is skipped if it starts with another cabinet's LONGER
         # prefix (e.g. "tcc1" belongs to "tcc", not the shorter "tc"), on top of
         # the global claimed_keys check.
-        other_longer_prefixes = [c["prefix"] for c in enabled_cabs if c["prefix"] != prefix and len(c["prefix"]) > len(prefix)]
+        other_longer_prefixes = [c["prefix"] for c in active_cabs if c["prefix"] != prefix and len(c["prefix"]) > len(prefix)]
         missing_slots = [i for i in range(1, count + 1) if i not in filled]
         if missing_slots:
             leftover_candidates = [
@@ -787,14 +807,12 @@ def extract_cabinet_channels(sheet_data, cabinet_config, sheet_labels=None):
 
     return channel_values, notifications, slot_labels
 
-# Computes each enabled cabinet's own average (e.g. "tf-a", "tc-a", "tvc-a") from
+# Computes each cabinet's own average (e.g. "tf-a", "tc-a", "tvc-a") from
 # whichever channel_values slots actually got filled — never a fixed 5/3 count.
 # Returns {"tf-a": ..., ...} for every cabinet that had at least one matched channel.
 def compute_cabinet_averages(channel_values, cabinet_config):
     averages = {}
     for cab in cabinet_config["cabinets"]:
-        if not cab.get("enabled", True):
-            continue
         prefix = cab["prefix"]
         count = int(cab.get("count", 0))
         vals = [channel_values[f"{prefix}-{i}"] for i in range(1, count + 1) if f"{prefix}-{i}" in channel_values]
@@ -1116,7 +1134,7 @@ with tab1:
                         except (ValueError, TypeError):
                             continue
 
-                # Extract every enabled cabinet's channels, driven by Cabinet Configuration
+                # Extract every cabinet's channels, driven by Cabinet Configuration
                 # (not a fixed field list) — this is what lets a non-numeric channel like
                 # "tf Box" count as an extra thermocouple when a cabinet's configured count
                 # exceeds the plain numbered ones found in the file.
@@ -1300,17 +1318,12 @@ with tab2:
 
     with st.expander(f"🗄️ Cabinet & Sensor Configuration for [{selected_volume}] ({selected_arrangement})", expanded=False):
         st.markdown("##### Cabinets")
-        st.caption("Uncheck a cabinet to stop collecting/predicting it going forward. Set the thermocouple count per cabinet — there's no upper limit; if an uploaded file is missing a channel, you'll be asked to enter it manually.")
+        st.caption("Every cabinet listed here is active. Delete a cabinet to stop collecting/predicting it. Set the thermocouple count per cabinet — there's no upper limit; if an uploaded file is missing a channel, you'll be told which ones weren't found.")
 
         cabinets_changed = False
         cab_to_delete = None
         for cab_idx, cab in enumerate(cab_sensor_cfg["cabinets"]):
-            c_chk, c_name, c_count, c_del = st.columns([1, 3, 2, 1])
-            with c_chk:
-                new_enabled = st.checkbox("", value=cab.get("enabled", True), key=f"cab_enabled_{selected_volume}_{selected_arrangement}_{cab_idx}")
-                if new_enabled != cab.get("enabled", True):
-                    cab["enabled"] = new_enabled
-                    cabinets_changed = True
+            c_name, c_count, c_del = st.columns([3, 2, 1])
             with c_name:
                 st.markdown(f"**{cab['name']}** `({cab['prefix']}-N)`")
             with c_count:
@@ -1330,6 +1343,7 @@ with tab2:
         if cab_to_delete is not None:
             removed_name = cab_sensor_cfg["cabinets"][cab_to_delete]["name"]
             cab_sensor_cfg["cabinets"].pop(cab_to_delete)
+            cab_sensor_cfg["cabinet_sensor_map"].pop(removed_name, None)
             save_memory_to_disk(st.session_state.db)
             st.success(f"Cabinet '{removed_name}' removed.")
             st.rerun()
@@ -1348,7 +1362,6 @@ with tab2:
                         "name": clean_name,
                         "prefix": derive_cabinet_prefix(clean_name),
                         "count": 3,
-                        "enabled": True,
                     })
                     save_memory_to_disk(st.session_state.db)
                     st.session_state.cabinet_form_id += 1
@@ -1371,8 +1384,8 @@ with tab2:
         if sensor_to_delete is not None:
             removed_sensor = cab_sensor_cfg["sensors"][sensor_to_delete]
             cab_sensor_cfg["sensors"].pop(sensor_to_delete)
-            # Drop the removed sensor from any per-channel assignments
-            for chan, assigned in cab_sensor_cfg["channel_sensor_map"].items():
+            # Drop the removed sensor from any per-cabinet assignments
+            for cab_name, assigned in cab_sensor_cfg["cabinet_sensor_map"].items():
                 if removed_sensor in assigned:
                     assigned.remove(removed_sensor)
             save_memory_to_disk(st.session_state.db)
@@ -1392,27 +1405,30 @@ with tab2:
                     st.success(f"Sensor '{clean_sensor}' added.")
                     st.rerun()
 
-        # Per-channel sensor assignment — only meaningful with 2+ sensors
+        # Per-cabinet sensor assignment — only meaningful with 2+ sensors. A sensor picked
+        # here controls every thermocouple in that cabinet.
         if len(cab_sensor_cfg["sensors"]) >= 2:
-            st.markdown("###### Which sensor(s) control each thermocouple")
-            channel_keys = all_channel_keys(cab_sensor_cfg)
-            if not channel_keys:
-                st.info("No thermocouples configured yet — set a count on at least one cabinet above.")
+            st.markdown("###### Which sensor(s) control each cabinet")
+            st.caption("A sensor picked for a cabinet controls all thermocouples in it. Leave a cabinet empty to have every sensor control it. S2 is always controlled by every sensor.")
+            if not cab_sensor_cfg["cabinets"]:
+                st.info("No cabinets configured yet — add a cabinet above.")
             else:
                 assignment_changed = False
-                for chan_key in channel_keys:
-                    current_assignment = cab_sensor_cfg["channel_sensor_map"].get(chan_key, [])
-                    # Keep only still-valid sensor names (in case one was renamed/removed)
-                    current_assignment = [s for s in current_assignment if s in cab_sensor_cfg["sensors"]]
+                # The sensor list is part of each widget key, so the selector resets cleanly
+                # whenever a sensor is added or removed instead of holding a stale choice.
+                sensors_key_part = "_".join(cab_sensor_cfg["sensors"])
+                for cab in cab_sensor_cfg["cabinets"]:
+                    current_assignment = cab_sensor_cfg["cabinet_sensor_map"].get(cab["name"], [])
+                    current_assignment = [x for x in current_assignment if x in cab_sensor_cfg["sensors"]]
                     new_assignment = st.multiselect(
-                        chan_key,
+                        f"{cab['name']} — {int(cab.get('count', 0))} thermocouple(s)",
                         options=cab_sensor_cfg["sensors"],
                         default=current_assignment,
-                        key=f"chan_sensor_{selected_volume}_{selected_arrangement}_{chan_key}",
-                        help="Leave empty to have every active sensor control this channel."
+                        key=f"cab_sensor_{selected_volume}_{selected_arrangement}_{cab['name']}_{sensors_key_part}",
+                        help="Leave empty to have every sensor control this cabinet."
                     )
                     if set(new_assignment) != set(current_assignment):
-                        cab_sensor_cfg["channel_sensor_map"][chan_key] = new_assignment
+                        cab_sensor_cfg["cabinet_sensor_map"][cab["name"]] = new_assignment
                         assignment_changed = True
                 if assignment_changed:
                     save_memory_to_disk(st.session_state.db)
@@ -1464,7 +1480,7 @@ with tab2:
                         except (ValueError, TypeError):
                             continue
 
-                # Extract every enabled cabinet's channels, driven by Cabinet Configuration
+                # Extract every cabinet's channels, driven by Cabinet Configuration
                 # (not a fixed field list) — same mechanism used in Tab 1, so a non-numeric
                 # channel like "tf Box" counts as an extra thermocouple here too.
                 _repo_cab_cfg = get_cabinet_sensor_config(selected_volume, selected_arrangement)

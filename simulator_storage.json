@@ -1633,7 +1633,11 @@
                     "Sensor FC",
                     "Sensor PC"
                 ],
-                "channel_sensor_map": {}
+                "channel_sensor_map": {
+                    "tf-1": [
+                        "Sensor FC"
+                    ]
+                }
             }
         }
     }

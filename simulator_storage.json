@@ -1620,7 +1620,7 @@
                         "name": "CC",
                         "prefix": "tcc",
                         "count": 3,
-                        "enabled": true
+                        "enabled": false
                     },
                     {
                         "name": "PC",

@@ -1613,61 +1613,31 @@
                     {
                         "name": "FC",
                         "prefix": "tf",
-                        "count": 6,
-                        "enabled": true
+                        "count": 5
                     },
                     {
                         "name": "PC",
                         "prefix": "tc",
-                        "count": 3,
-                        "enabled": true
+                        "count": 3
                     },
                     {
                         "name": "VC",
                         "prefix": "tvc",
-                        "count": 3,
-                        "enabled": true
+                        "count": 3
                     }
                 ],
                 "sensors": [
                     "Sensor FC",
                     "Sensor PC"
                 ],
-                "channel_sensor_map": {
-                    "tf-1": [
+                "cabinet_sensor_map": {
+                    "FC": [
                         "Sensor FC"
                     ],
-                    "tf-2": [
-                        "Sensor FC"
-                    ],
-                    "tf-3": [
-                        "Sensor FC"
-                    ],
-                    "tf-4": [
-                        "Sensor FC"
-                    ],
-                    "tf-5": [
-                        "Sensor FC"
-                    ],
-                    "tf-6": [
-                        "Sensor FC"
-                    ],
-                    "tc-1": [
+                    "PC": [
                         "Sensor PC"
                     ],
-                    "tc-2": [
-                        "Sensor PC"
-                    ],
-                    "tc-3": [
-                        "Sensor PC"
-                    ],
-                    "tvc-1": [
-                        "Sensor PC"
-                    ],
-                    "tvc-2": [
-                        "Sensor PC"
-                    ],
-                    "tvc-3": [
+                    "VC": [
                         "Sensor PC"
                     ]
                 }

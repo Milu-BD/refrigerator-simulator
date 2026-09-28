@@ -367,7 +367,7 @@ def undoable_data_editor(base_key, initial_df, column_config, key_suffix=""):
         column_config=column_config,
         key=editor_widget_key,
     )
-    edited = round_df(add_avg_columns(edited_raw.drop(columns=["tf-a", "tc-a"], errors="ignore")))
+    edited = round_df(add_avg_columns(edited_raw.drop(columns=avg_column_names(edited_raw), errors="ignore")))
 
     # A real edit happened this rerun (not an undo/redo click) — snapshot the prior state
     if not edited.equals(st.session_state[base_df_key]):
@@ -545,19 +545,34 @@ def render_simple_html_table(df, highlight_missing_cols=None):
 # (tf-1..5, tc-1..3, tvc, S2, Sensor), regardless of the underlying dict's key order.
 # sensor_value may be None if no Sensor reading was ever found for this record.
 def build_pulldown_df(pulldown_data_dict, sensor_value):
-    row = {
-        "tf-1": pulldown_data_dict.get("tf-1", 0.0),
-        "tf-2": pulldown_data_dict.get("tf-2", 0.0),
-        "tf-3": pulldown_data_dict.get("tf-3", 0.0),
-        "tf-4": pulldown_data_dict.get("tf-4", 0.0),
-        "tf-5": pulldown_data_dict.get("tf-5", 0.0),
-        "tc-1": pulldown_data_dict.get("tc-1", 0.0),
-        "tc-2": pulldown_data_dict.get("tc-2", 0.0),
-        "tc-3": pulldown_data_dict.get("tc-3", 0.0),
-        "tvc": pulldown_data_dict.get("tvc", 0.0),
-        "S2": pulldown_data_dict.get("S2", 0.0),
-        "Sensor": sensor_value if sensor_value is not None else np.nan,
-    }
+    # Group every "{prefix}-{number}" channel key present, in first-seen prefix order
+    # and numeric order within each group — works for any cabinet, any count, not
+    # just the original fixed tf-1..5/tc-1..3.
+    groups = {}
+    prefix_order = []
+    for k in pulldown_data_dict.keys():
+        m = re.match(r'^(.+)-(\d+)$', str(k))
+        if m:
+            prefix = m.group(1)
+            if prefix not in groups:
+                groups[prefix] = []
+                prefix_order.append(prefix)
+            groups[prefix].append((int(m.group(2)), k))
+
+    row = {}
+    for prefix in prefix_order:
+        for _, k in sorted(groups[prefix]):
+            row[k] = pulldown_data_dict.get(k, 0.0)
+
+    # Legacy fallback: an old record's bare cabinet value (e.g. "tvc") that was never
+    # split into individual numbered channels — show it as-is rather than losing it
+    for k, v in pulldown_data_dict.items():
+        if k == "S2" or re.match(r'^.+-(\d+)$', str(k)) or str(k).endswith('-a'):
+            continue
+        row[k] = v
+
+    row["S2"] = pulldown_data_dict.get("S2", 0.0)
+    row["Sensor"] = sensor_value if sensor_value is not None else np.nan
     return pd.DataFrame([row])
 
 # Computes tf-a (avg of tf-1..tf-5) and tc-a (avg of tc-1..tc-3) for a dict of sensor values
@@ -568,29 +583,42 @@ def compute_avg_fields(values_dict):
     tc_a = round(sum(tc_vals) / len(tc_vals), 1) if tc_vals else 0.0
     return tf_a, tc_a
 
-# Adds tf-a and tc-a average columns to a single-row-per-record dataframe,
-# positioned immediately after tf-5 and tc-3 respectively
+# Adds a "{prefix}-a" average column for every group of "{prefix}-{number}" columns
+# found in the dataframe (e.g. tf-1..tf-6 -> tf-a, tc-1..tc-3 -> tc-a, tvc-1..tvc-3 ->
+# tvc-a) — fully generic, so this keeps working unchanged for the old fixed CPT/
+# prediction dataframes (which only ever have tf-1..5/tc-1..3) AND for the new
+# dynamic Pulldown dataframes (any cabinet, any channel count), with no separate
+# code path needed for either. Each average is positioned right after its group's
+# highest-numbered member.
 def add_avg_columns(df):
     df = df.copy()
-    tf_cols = [c for c in ["tf-1", "tf-2", "tf-3", "tf-4", "tf-5"] if c in df.columns]
-    tc_cols = [c for c in ["tc-1", "tc-2", "tc-3"] if c in df.columns]
-    if tf_cols:
-        df["tf-a"] = df[tf_cols].apply(pd.to_numeric, errors="coerce").mean(axis=1).round(1)
-    if tc_cols:
-        df["tc-a"] = df[tc_cols].apply(pd.to_numeric, errors="coerce").mean(axis=1).round(1)
+    groups = {}
+    for c in df.columns:
+        m = re.match(r'^(.+)-(\d+)$', str(c))
+        if m:
+            groups.setdefault(m.group(1), []).append((int(m.group(2)), c))
 
-    # Reorder so tf-a sits right after tf-5, and tc-a sits right after tc-3
-    cols = list(df.columns)
+    last_member_of = {}
+    for prefix, numbered_cols in groups.items():
+        numbered_cols.sort(key=lambda t: t[0])  # sort by numeric suffix, not column order
+        cols = [c for _, c in numbered_cols]
+        avg_col = f"{prefix}-a"
+        if avg_col not in df.columns:
+            df[avg_col] = df[cols].apply(pd.to_numeric, errors="coerce").mean(axis=1).round(1)
+            last_member_of[avg_col] = cols[-1]
 
-    def move_after(cols, col_to_move, after_col):
-        if col_to_move in cols and after_col in cols:
-            cols.remove(col_to_move)
-            cols.insert(cols.index(after_col) + 1, col_to_move)
-        return cols
+    # Reorder so each "{prefix}-a" sits right after its group's last numbered member
+    cols_order = list(df.columns)
+    for avg_col, after_col in last_member_of.items():
+        cols_order.remove(avg_col)
+        cols_order.insert(cols_order.index(after_col) + 1, avg_col)
+    return df[cols_order]
 
-    cols = move_after(cols, "tf-a", "tf-5")
-    cols = move_after(cols, "tc-a", "tc-3")
-    return df[cols]
+# Returns the names of every computed average column (e.g. "tf-a", "tvc-a") present
+# in a dataframe — used instead of a hardcoded ["tf-a", "tc-a"] list so this keeps
+# working for any cabinet's average column, not just the original two.
+def avg_column_names(df):
+    return [c for c in df.columns if re.match(r'^.+-a$', str(c))]
 
 # Helper initialization to safeguard nested multi-arrangement structure
 def verify_db_structure(vol, arr_name, p_amb, c_amb):
@@ -685,37 +713,58 @@ def extract_cabinet_channels(sheet_data, cabinet_config, sheet_labels=None):
     slot_labels = {}
     sheet_keys_in_order = list(sheet_data.keys())  # dict preserves file row order
 
-    for cab in cabinet_config["cabinets"]:
-        if not cab.get("enabled", True):
-            continue
+    enabled_cabs = [c for c in cabinet_config["cabinets"] if c.get("enabled", True) and int(c.get("count", 0)) > 0]
+
+    # Claimed keys are GLOBAL across all cabinets in this call, so the same file key
+    # (e.g. "tcc1") can never be double-counted toward two different cabinets.
+    claimed_keys = set()
+    # Results keyed by cabinet name, filled in a first pass ordered by descending
+    # prefix length — so a longer, more specific prefix (e.g. "tcc" for Chiller
+    # Cabinet) claims its matches before a shorter one (e.g. "tc" for PC) gets a
+    # chance to mistake "tcc1" for one of its own leftover candidates.
+    results_by_cab = {}
+    for cab in sorted(enabled_cabs, key=lambda c: -len(c["prefix"])):
         prefix = cab["prefix"]
         count = int(cab.get("count", 0))
-        if count <= 0:
-            continue
 
-        claimed_keys = set()
         filled = {}
         filled_from_fallback = {}
 
         # Step 1: exact numeric matches (tf1, tf2, ...)
         for i in range(1, count + 1):
             numeric_key = f"{prefix}{i}"
-            if numeric_key in sheet_data:
+            if numeric_key in sheet_data and numeric_key not in claimed_keys:
                 filled[i] = sheet_data[numeric_key]
                 claimed_keys.add(numeric_key)
 
         # Step 2: fill remaining slots from other prefix-matching, unclaimed keys,
-        # in the order they appear in the file (e.g. "tf box" -> "tfbox")
+        # in the order they appear in the file (e.g. "tf box" -> "tfbox"). A
+        # candidate is skipped if it starts with another enabled cabinet's LONGER
+        # prefix (e.g. "tcc1" belongs to "tcc", not the shorter "tc"), on top of
+        # the global claimed_keys check.
+        other_longer_prefixes = [c["prefix"] for c in enabled_cabs if c["prefix"] != prefix and len(c["prefix"]) > len(prefix)]
         missing_slots = [i for i in range(1, count + 1) if i not in filled]
         if missing_slots:
             leftover_candidates = [
                 k for k in sheet_keys_in_order
-                if k.startswith(prefix) and k not in claimed_keys
+                if k.startswith(prefix)
+                and k not in claimed_keys
+                and not any(k.startswith(p) for p in other_longer_prefixes)
             ]
             for slot, cand_key in zip(missing_slots, leftover_candidates):
                 filled[slot] = sheet_data[cand_key]
                 filled_from_fallback[slot] = cand_key
                 claimed_keys.add(cand_key)
+
+        results_by_cab[cab["name"]] = (filled, filled_from_fallback)
+
+    # Second pass, in the cabinet's original configured order, just for readable output
+    for cab in cabinet_config["cabinets"]:
+        if cab["name"] not in results_by_cab:
+            continue
+        prefix = cab["prefix"]
+        count = int(cab.get("count", 0))
+        filled, filled_from_fallback = results_by_cab[cab["name"]]
 
         matched_count = len(filled)
         fallback_descriptions = []
@@ -1074,7 +1123,6 @@ with tab1:
                 _sim_cab_cfg = get_cabinet_sensor_config(selected_volume, selected_arrangement)
                 _sim_channel_values, _sim_cab_notifications, _sim_slot_labels = extract_cabinet_channels(sheet_data, _sim_cab_cfg, sheet_labels)
                 st.session_state.active_pulldown_form.update(_sim_channel_values)
-                st.session_state.active_pulldown_form.update(compute_cabinet_averages(_sim_channel_values, _sim_cab_cfg))
                 st.session_state.active_pulldown_form['_cabinet_notifications'] = _sim_cab_notifications
                 st.session_state.active_pulldown_form['_slot_labels'] = _sim_slot_labels
 
@@ -1399,10 +1447,12 @@ with tab2:
             try:
                 # 1. PARSE PULLDOWN DATA
                 df_p_sum = pd.read_excel(repo_pulldown_file, sheet_name=0, header=None)
-                df_p_sum[0] = df_p_sum[0].astype(str).apply(normalize_sensor_name)
+                raw_labels_repo = df_p_sum[0].astype(str)
+                df_p_sum[0] = raw_labels_repo.apply(normalize_sensor_name)
                 
                 sheet_data = {}
-                for _, row in df_p_sum.dropna(subset=[0]).iterrows():
+                sheet_labels = {}  # normalized key -> original text (e.g. "tfbox" -> "tf Box")
+                for idx, row in df_p_sum.dropna(subset=[0]).iterrows():
                     lbl = row[0]
                     if lbl not in sheet_data:
                         try:
@@ -1410,24 +1460,20 @@ with tab2:
                             if pd.isna(parsed_val):
                                 continue  # blank cell — don't treat as a found value
                             sheet_data[lbl] = round(parsed_val, 1)
+                            sheet_labels[lbl] = raw_labels_repo.loc[idx].strip()
                         except (ValueError, TypeError):
                             continue
 
-                mapping_keys = {
-                    'tf-1':'tf1', 'tf-2':'tf2', 'tf-3':'tf3', 'tf-4':'tf4', 'tf-5':'tf5', 
-                    'tc-1':'tc1', 'tc-2':'tc2', 'tc-3':'tc3', 'S2':'s2'
-                }
-                
-                p_extracted = {}
-                for target_key, normalized_label in mapping_keys.items():
-                    p_extracted[target_key] = sheet_data.get(normalized_label, 0.0)
-                        
-                tvc_values = [sheet_data[lbl] for lbl in ['tvc1', 'tvc2', 'tvc3'] if lbl in sheet_data]
-                if tvc_values:
-                    p_extracted['tvc'] = round(sum(tvc_values) / len(tvc_values), 1)
-                else:
-                    p_extracted['tvc'] = 0.0
-                    
+                # Extract every enabled cabinet's channels, driven by Cabinet Configuration
+                # (not a fixed field list) — same mechanism used in Tab 1, so a non-numeric
+                # channel like "tf Box" counts as an extra thermocouple here too.
+                _repo_cab_cfg = get_cabinet_sensor_config(selected_volume, selected_arrangement)
+                p_extracted, cabinet_notifications, repo_slot_labels = extract_cabinet_channels(sheet_data, _repo_cab_cfg, sheet_labels)
+
+                # S2 is not part of the cabinet system — same handling as always
+                if 's2' in sheet_data:
+                    p_extracted['S2'] = sheet_data['s2']
+
                 # None (not 0.0) when the file has no "Sensor" row — 0.0 could be a real reading
                 resolved_sensor = find_sensor_reading(sheet_data)
 
@@ -1700,6 +1746,8 @@ with tab2:
                 st.session_state.cpt_file_key += 1
                 
                 st.success(f"🚀 Model Simulator Trained successfully! Hard-Backup saved to storage.")
+                for _note in cabinet_notifications:
+                    st.caption(_note)
                 if pulldown_checkpoints:
                     st.info(f"📍 Also captured {len(pulldown_checkpoints)} named checkpoint(s) from the Pulldown file: {', '.join(pulldown_checkpoints.keys())}")
                 st.rerun()
@@ -1827,13 +1875,14 @@ with tab3:
                         edited_p_df = p_df.copy()
                     else:
                         # EDIT MODE — editable grid with Undo/Redo (whole-table snapshots, not
-                        # per-cell — see undoable_data_editor). tf-a/tc-a are computed averages,
-                        # shown but not directly editable. st.data_editor can't highlight
-                        # individual cells, so a caption below flags a missing Sensor instead.
+                        # per-cell — see undoable_data_editor). Computed average columns (e.g.
+                        # tf-a, tvc-a) are shown but not directly editable. st.data_editor
+                        # can't highlight individual cells, so a caption below flags a missing
+                        # Sensor instead.
                         edited_p_df = undoable_data_editor(
                             p_undo_base_key,
                             p_df,
-                            build_column_config(p_df, disabled_cols=["tf-a", "tc-a"])
+                            build_column_config(p_df, disabled_cols=avg_column_names(p_df))
                         )
                         if pd.isna(edited_p_df.iloc[0]["Sensor"]):
                             st.caption(":red[⚠️ Sensor is empty — enter a value above if available.]")
@@ -1905,13 +1954,14 @@ with tab3:
                             edited_cpt_df = cpt_df.copy()
                         else:
                             # EDIT MODE — editable grid with Undo/Redo (whole-table snapshots, not
-                            # per-cell — see undoable_data_editor). tf-a/tc-a/Test Flag/Metric are locked.
+                            # per-cell — see undoable_data_editor). Average columns, Test Flag
+                            # and Metric are locked.
                             edited_cpt_df = undoable_data_editor(
                                 cpt_undo_base_key,
                                 cpt_df,
                                 build_column_config(
                                     cpt_df,
-                                    disabled_cols=["tf-a", "tc-a", "Test Flag", "Metric"],
+                                    disabled_cols=avg_column_names(cpt_df) + ["Test Flag", "Metric"],
                                     text_cols=["Test Flag", "Metric"]
                                 )
                             )
@@ -1944,11 +1994,12 @@ with tab3:
                             save_clicked = False
 
                         if save_clicked:
-                            # Save Pulldown Matrix (tf-a/tc-a are computed display-only fields, never stored).
-                            # Sensor lives separately as pulldown_baseline_sensor, not inside pulldown_data.
+                            # Save Pulldown Matrix (average columns are computed display-only
+                            # fields, never stored). Sensor lives separately as
+                            # pulldown_baseline_sensor, not inside pulldown_data.
                             sensor_row_val = edited_p_df.iloc[0].get("Sensor")
                             record["pulldown_baseline_sensor"] = None if pd.isna(sensor_row_val) else float(sensor_row_val)
-                            record["pulldown_data"] = edited_p_df.drop(columns=["tf-a", "tc-a", "Sensor"], errors="ignore").iloc[0].to_dict()
+                            record["pulldown_data"] = edited_p_df.drop(columns=avg_column_names(edited_p_df) + ["Sensor"], errors="ignore").iloc[0].to_dict()
 
                             # Save CPT Matrix — reassemble the 4 rows per flag back into the nested structure
                             label_to_key = {v: k for k, v in metric_labels.items()}

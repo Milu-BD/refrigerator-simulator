@@ -1566,32 +1566,28 @@
                     {
                         "name": "FC",
                         "prefix": "tf",
-                        "count": 5,
-                        "enabled": true
+                        "count": 5
                     },
                     {
                         "name": "PC",
                         "prefix": "tc",
-                        "count": 3,
-                        "enabled": true
+                        "count": 3
                     },
                     {
                         "name": "VC",
                         "prefix": "tvc",
-                        "count": 3,
-                        "enabled": true
+                        "count": 3
                     },
                     {
                         "name": "CC",
                         "prefix": "tcc",
-                        "count": 3,
-                        "enabled": true
+                        "count": 3
                     }
                 ],
                 "sensors": [
                     "Sensor-1"
                 ],
-                "channel_sensor_map": {}
+                "cabinet_sensor_map": {}
             }
         }
     },
@@ -1623,6 +1619,11 @@
                     {
                         "name": "VC",
                         "prefix": "tvc",
+                        "count": 3
+                    },
+                    {
+                        "name": "CC",
+                        "prefix": "tcc",
                         "count": 3
                     }
                 ],

@@ -150,6 +150,38 @@ def find_sensor_reading(sheet_data):
             return val
     return None
 
+# Returns every "sensor"-containing row in a parsed pulldown sheet_data dict, keyed by
+# its original (pre-normalization) label when available — e.g. {"Sensor FC": -23.3,
+# "Sensor PC": 5.0, "Defrost Sensor": -29.5}. Unlike find_sensor_reading (which only
+# ever returns one value, for backward compatibility with the single-sensor Pulldown
+# "Sensor (°C)" field), this collects all of them, for cross-matching against whatever
+# sensor-named columns a CPT file has.
+def discover_sensor_names(volume_records):
+    """Returns every distinct sensor name found in historical CPT training data for
+    this Volume+Arrangement (e.g. ["Sensor FC", "Sensor PC"]), in first-seen order.
+    Falls back to a single generic "Sensor" entry for records saved before the
+    dynamic multi-sensor structure existed (legacy Sensor/SensorMax only)."""
+    names = []
+    seen = set()
+    for record in volume_records:
+        for flag, level_data in record.get("cpt_data", {}).items():
+            sensors_dict = level_data.get("sensors") if isinstance(level_data, dict) else None
+            if sensors_dict:
+                for name in sensors_dict.keys():
+                    if name not in seen:
+                        seen.add(name)
+                        names.append(name)
+    return names if names else ["Sensor"]
+
+def find_all_sensor_readings(sheet_data, sheet_labels=None):
+    sheet_labels = sheet_labels or {}
+    found = {}
+    for norm_key, val in sheet_data.items():
+        if "sensor" in norm_key:
+            label = sheet_labels.get(norm_key, norm_key)
+            found[label] = val
+    return found
+
 # Scans an openpyxl worksheet for a cell whose text matches one of label_variants
 # (case-insensitive, whitespace-trimmed — e.g. "Entry Code" / "entry code" / "ENTRY CODE"
 # all match), then looks nearby for a value starting with value_prefix — first scanning
@@ -1267,11 +1299,22 @@ with tab1:
         
         # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
-        st.caption("Each query point needs a Sensor Min and Sensor Max reading.")
+
+        sensor_names_for_tab1 = discover_sensor_names(vol_records)
+        if len(sensor_names_for_tab1) > 1:
+            st.caption(
+                f"Training data has {len(sensor_names_for_tab1)} sensors: {', '.join(sensor_names_for_tab1)}. "
+                f"Each query point needs a Min and Max reading per sensor. For now, only "
+                f"'{sensor_names_for_tab1[0]}' drives the prediction — full multi-sensor "
+                f"prediction is a later step; the rest are collected but not yet used."
+            )
+        else:
+            st.caption("Each query point needs a Sensor Min and Sensor Max reading.")
         
         num_targets = st.number_input("Number of target sensor points:", min_value=1, max_value=None, value=5, step=1)
         
-        target_sensor_pairs = []
+        target_sensor_pairs = []       # primary sensor only — feeds the existing prediction call
+        target_sensor_pairs_all = []   # {sensor_name: (min, max)} per point — all sensors, for later use
         s_cols = st.columns(int(num_targets))
         for idx in range(int(num_targets)):
             # Set up default sensor values for the points (adjust the start value or step as needed)
@@ -1280,21 +1323,25 @@ with tab1:
 
             with s_cols[idx]:
                 st.markdown(f"**Point {idx+1}**")
-                min_val = st.number_input(
-                    "Sensor Min (°C):",
-                    value=default_min_val,
-                    step=0.1,
-                    format="%.1f",
-                    key=f"q_s_min_{p_key}_{c_key}_{idx}"
-                )
-                max_val = st.number_input(
-                    "Sensor Max (°C):",
-                    value=default_max_val,
-                    step=0.1,
-                    format="%.1f",
-                    key=f"q_s_max_{p_key}_{c_key}_{idx}"
-                )
-            target_sensor_pairs.append((min_val, max_val))
+                point_pairs = {}
+                for sensor_name in sensor_names_for_tab1:
+                    min_val = st.number_input(
+                        f"{sensor_name} Min (°C):",
+                        value=default_min_val,
+                        step=0.1,
+                        format="%.1f",
+                        key=f"q_s_min_{p_key}_{c_key}_{idx}_{sensor_name}"
+                    )
+                    max_val = st.number_input(
+                        f"{sensor_name} Max (°C):",
+                        value=default_max_val,
+                        step=0.1,
+                        format="%.1f",
+                        key=f"q_s_max_{p_key}_{c_key}_{idx}_{sensor_name}"
+                    )
+                    point_pairs[sensor_name] = (min_val, max_val)
+            target_sensor_pairs.append(point_pairs[sensor_names_for_tab1[0]])
+            target_sensor_pairs_all.append(point_pairs)
             
         if st.button("🚀 Generate Predictive CPT Dataset Matrices", type="primary"):
             if new_pulldown_sensor is None:
@@ -1644,6 +1691,139 @@ with tab2:
                         st.success("✅ Strategy A successful.")
                 except Exception as e:
                     st.write(f"Strategy A failed: {e}")
+
+                # -------------------------------------------------------------
+                # STRATEGY A2 : "Data Criteria" Anchor Parser — newer report format
+                # with named Cabinet/Sensor headers (e.g. "Freezer Cabinet",
+                # "Sensor FC", "Sensor PC"), found by column offset from the
+                # "Data Criteria" cell rather than fixed absolute columns, so it
+                # works whether or not the sheet has an extra leading column.
+                #
+                # Sensor columns are detected dynamically (any header cell containing
+                # "sensor", not just "Sensor FC"/"Sensor PC") and only kept if that same
+                # sensor name is also found in the Pulldown file — e.g. a "Defrost
+                # Sensor" column with no Pulldown counterpart is dropped, since there's
+                # no way to query it later. Each matched sensor's Min/Max is stored
+                # dynamically in cpt_structured[flag]["sensors"][name]. The legacy
+                # Sensor/SensorMax fields are also populated, from whichever matched
+                # sensor appears first by column order, so today's single-sensor
+                # prediction pipeline keeps working unchanged — full multi-sensor
+                # prediction is a later step.
+                # -------------------------------------------------------------
+                if not parsed_successfully:
+                    try:
+                        wb_a2 = openpyxl.load_workbook(repo_cpt_file, data_only=True)
+                        ws_a2 = wb_a2[wb_a2.sheetnames[0]]
+
+                        def safe_float_a2(val):
+                            if val is None:
+                                return 0.0
+                            try:
+                                if isinstance(val, str):
+                                    val = val.replace("°C", "").replace("̊C", "").strip()
+                                return round(float(val), 1)
+                            except (ValueError, TypeError):
+                                return 0.0
+
+                        header_row_a2 = None
+                        dc_col_a2 = None
+                        for r in range(1, min(ws_a2.max_row, 60) + 1):
+                            for c in range(1, min(ws_a2.max_column, 30) + 1):
+                                v = ws_a2.cell(r, c).value
+                                if isinstance(v, str) and v.strip().lower() == "data criteria":
+                                    left_v = ws_a2.cell(r, c - 1).value
+                                    if isinstance(left_v, str) and left_v.strip().lower() == "testflag":
+                                        header_row_a2, dc_col_a2 = r, c
+                                        break
+                            if header_row_a2:
+                                break
+
+                        if header_row_a2 is None:
+                            raise Exception("New-format 'Data Criteria' header not found.")
+
+                        testflag_col_a2 = dc_col_a2 - 1
+                        tf_cols_a2 = [dc_col_a2 + i for i in range(1, 6)]
+                        tc_cols_a2 = [dc_col_a2 + i for i in range(8, 11)]
+                        tvc_cols_a2 = [dc_col_a2 + i for i in range(12, 15)]
+                        s2_col_a2 = dc_col_a2 + 18
+
+                        # Dynamic sensor column detection — any header cell (same row as
+                        # "Data Criteria") containing "sensor", in column order
+                        all_cpt_sensor_cols_a2 = {}
+                        for c in range(1, min(ws_a2.max_column, 30) + 1):
+                            v = ws_a2.cell(header_row_a2, c).value
+                            if isinstance(v, str) and "sensor" in v.lower():
+                                all_cpt_sensor_cols_a2[v.strip()] = c
+
+                        # Cross-match against every "sensor"-named reading found in the
+                        # already-parsed Pulldown file (sheet_data/sheet_labels, parsed
+                        # earlier in this same upload) — keep only names present in both
+                        pulldown_sensor_readings_a2 = find_all_sensor_readings(sheet_data, sheet_labels)
+                        pulldown_sensor_norms_a2 = {normalize_sensor_name(lbl) for lbl in pulldown_sensor_readings_a2.keys()}
+
+                        sensor_cols_a2 = {}
+                        unmatched_cpt_sensors_a2 = []
+                        for label, col in all_cpt_sensor_cols_a2.items():
+                            if normalize_sensor_name(label) in pulldown_sensor_norms_a2:
+                                sensor_cols_a2[label] = col
+                            else:
+                                unmatched_cpt_sensors_a2.append(label)
+                        unmatched_pulldown_sensors_a2 = [
+                            lbl for lbl in pulldown_sensor_readings_a2
+                            if normalize_sensor_name(lbl) not in {normalize_sensor_name(l) for l in all_cpt_sensor_cols_a2}
+                        ]
+                        if unmatched_cpt_sensors_a2:
+                            st.caption(f"ℹ️ CPT sensor column(s) with no Pulldown match, not used: {', '.join(unmatched_cpt_sensors_a2)}")
+                        if unmatched_pulldown_sensors_a2:
+                            st.caption(f"ℹ️ Pulldown sensor reading(s) with no CPT match, not used as a regulator: {', '.join(unmatched_pulldown_sensors_a2)}")
+
+                        # Whichever matched sensor is leftmost drives the legacy
+                        # Sensor/SensorMax fields, for backward compatibility
+                        primary_sensor_name_a2 = min(sensor_cols_a2, key=sensor_cols_a2.get) if sensor_cols_a2 else None
+
+                        cpt_structured = {}
+                        current_flag_a2 = None
+                        for data_row in range(header_row_a2 + 2, ws_a2.max_row + 1):
+                            testflag_val = ws_a2.cell(data_row, testflag_col_a2).value
+                            crit_val = ws_a2.cell(data_row, dc_col_a2).value
+                            crit = str(crit_val).strip().lower() if crit_val is not None else ""
+
+                            if testflag_val is not None and str(testflag_val).strip():
+                                current_flag_a2 = str(testflag_val).strip()
+                                if current_flag_a2 not in cpt_structured:
+                                    cpt_structured[current_flag_a2] = {"S2": 0.0, "Sensor": 0.0, "SensorMax": 0.0, "sensors": {}}
+
+                            if current_flag_a2 is None:
+                                continue
+                            if current_flag_a2 not in cpt_structured:
+                                cpt_structured[current_flag_a2] = {"S2": 0.0, "Sensor": 0.0, "SensorMax": 0.0, "sensors": {}}
+
+                            if crit in metric_types:
+                                cpt_structured[current_flag_a2][crit] = {
+                                    "tf-1": safe_float_a2(ws_a2.cell(data_row, tf_cols_a2[0]).value),
+                                    "tf-2": safe_float_a2(ws_a2.cell(data_row, tf_cols_a2[1]).value),
+                                    "tf-3": safe_float_a2(ws_a2.cell(data_row, tf_cols_a2[2]).value),
+                                    "tf-4": safe_float_a2(ws_a2.cell(data_row, tf_cols_a2[3]).value),
+                                    "tf-5": safe_float_a2(ws_a2.cell(data_row, tf_cols_a2[4]).value),
+                                    "tc-1": safe_float_a2(ws_a2.cell(data_row, tc_cols_a2[0]).value),
+                                    "tc-2": safe_float_a2(ws_a2.cell(data_row, tc_cols_a2[1]).value),
+                                    "tc-3": safe_float_a2(ws_a2.cell(data_row, tc_cols_a2[2]).value),
+                                    "tvc": round(sum(safe_float_a2(ws_a2.cell(data_row, c).value) for c in tvc_cols_a2) / 3, 1),
+                                }
+                                if crit == "mean":
+                                    cpt_structured[current_flag_a2]["S2"] = safe_float_a2(ws_a2.cell(data_row, s2_col_a2).value)
+                                elif crit in ("min", "max"):
+                                    for sensor_name, sensor_col in sensor_cols_a2.items():
+                                        sensor_block = cpt_structured[current_flag_a2]["sensors"].setdefault(sensor_name, {"min": 0.0, "max": 0.0})
+                                        sensor_block[crit] = safe_float_a2(ws_a2.cell(data_row, sensor_col).value)
+                                        if sensor_name == primary_sensor_name_a2:
+                                            cpt_structured[current_flag_a2]["Sensor" if crit == "min" else "SensorMax"] = sensor_block[crit]
+
+                        if cpt_structured:
+                            parsed_successfully = True
+                            st.success("✅ Strategy A2 (new report format) successful.")
+                    except Exception as e:
+                        st.write(f"Strategy A2 failed: {e}")
 
                 # --- STRATEGY B: 2nd Sheet Multi-Row Header Format ---
                 if not parsed_successfully:

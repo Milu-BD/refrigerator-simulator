@@ -156,21 +156,50 @@ def find_sensor_reading(sheet_data):
 # ever returns one value, for backward compatibility with the single-sensor Pulldown
 # "Sensor (°C)" field), this collects all of them, for cross-matching against whatever
 # sensor-named columns a CPT file has.
+def sensor_names_in_cpt_data(cpt_data_dict):
+    """Every distinct sensor name found within one record's cpt_data (e.g.
+    ["Sensor FC", "Sensor PC"]), in first-seen order. Empty for records saved
+    before the dynamic multi-sensor structure existed (legacy Sensor/SensorMax only)."""
+    names = []
+    seen = set()
+    for flag, block in cpt_data_dict.items():
+        sensors_dict = block.get("sensors") if isinstance(block, dict) else None
+        if sensors_dict:
+            for name in sensors_dict.keys():
+                if name not in seen:
+                    seen.add(name)
+                    names.append(name)
+    return names
+
+def cpt_has_sensor_data(cpt_structured):
+    """True if any level in a parsed CPT has a real (non-zero) Sensor reading, either in
+    the dynamic per-sensor structure or the legacy Sensor/SensorMax fields. Exactly 0.0
+    everywhere is how a missing column parses, so it is treated as "not found"."""
+    for block in cpt_structured.values():
+        if not isinstance(block, dict):
+            continue
+        if block.get("Sensor") or block.get("SensorMax"):
+            return True
+        for sdata in (block.get("sensors") or {}).values():
+            if sdata.get("min") or sdata.get("max"):
+                return True
+    return False
+
+def cpt_has_s2_data(cpt_structured):
+    """True if any level in a parsed CPT has a real (non-zero) S2 reading."""
+    return any(isinstance(b, dict) and b.get("S2") for b in cpt_structured.values())
+
 def discover_sensor_names(volume_records):
     """Returns every distinct sensor name found in historical CPT training data for
-    this Volume+Arrangement (e.g. ["Sensor FC", "Sensor PC"]), in first-seen order.
-    Falls back to a single generic "Sensor" entry for records saved before the
-    dynamic multi-sensor structure existed (legacy Sensor/SensorMax only)."""
+    this Volume+Arrangement, across all records. Falls back to a single generic
+    "Sensor" entry if no record has the dynamic multi-sensor structure."""
     names = []
     seen = set()
     for record in volume_records:
-        for flag, level_data in record.get("cpt_data", {}).items():
-            sensors_dict = level_data.get("sensors") if isinstance(level_data, dict) else None
-            if sensors_dict:
-                for name in sensors_dict.keys():
-                    if name not in seen:
-                        seen.add(name)
-                        names.append(name)
+        for name in sensor_names_in_cpt_data(record.get("cpt_data", {})):
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
     return names if names else ["Sensor"]
 
 def find_all_sensor_readings(sheet_data, sheet_labels=None):
@@ -839,6 +868,77 @@ def extract_cabinet_channels(sheet_data, cabinet_config, sheet_labels=None):
 
     return channel_values, notifications, slot_labels
 
+# -----------------------------------------------------------------
+# CPT-side channel detection (new report format).
+# Reads the two header rows of the CPT table: the upper row holds cabinet titles
+# ("Freezer Cabinet", "Refrigerator Cabinet", ...) and the lower row holds the
+# thermocouple names ("tf1", "tf Box", "tvc1", "Avg. C", ...). Every named
+# thermocouple column is returned, so the CPT file decides what channels exist —
+# nothing is fixed to 5/3/1. "Avg." columns are skipped (averages are always
+# computed by this app). Returns [(column, original_label, cabinet_title), ...].
+# -----------------------------------------------------------------
+def detect_cpt_channel_columns(ws, header_row, first_col, last_col):
+    out = []
+    current_title = ""
+    for c in range(first_col, last_col + 1):
+        top = ws.cell(header_row, c).value
+        if isinstance(top, str) and top.strip():
+            current_title = top.strip()
+        label = ws.cell(header_row + 1, c).value
+        if not isinstance(label, str) or not label.strip():
+            continue
+        if label.strip().lower().startswith("avg"):
+            continue
+        out.append((c, label.strip(), current_title))
+    return out
+
+# Builds {slot_key: value} for one CPT data row (one Mean/Min/Max/(Max+Min)/2 row),
+# using the same Cabinet Configuration matching as the Pulldown file (so "tf Box"
+# becomes the next free FC slot, exactly like in the Pulldown). Blank cells are skipped.
+def extract_cpt_row_channels(ws, data_row, channel_cols, cabinet_config):
+    row_data, row_labels = {}, {}
+    for col, label, _title in channel_cols:
+        v = ws.cell(data_row, col).value
+        try:
+            if isinstance(v, str):
+                v = v.replace("°C", "").replace("̊C", "").strip()
+            fv = float(v)
+        except (ValueError, TypeError):
+            continue
+        if fv != fv:  # NaN
+            continue
+        key = normalize_sensor_name(label)
+        if key and key not in row_data:
+            row_data[key] = round(fv, 1)
+            row_labels[key] = label
+    return extract_cabinet_channels(row_data, cabinet_config, row_labels)
+
+# Compares the thermocouple slots found in the CPT file with those found in the
+# Pulldown file. Returns (matched_keys, notes). Only a thermocouple present in BOTH
+# files can be used together later; everything else is reported in plain English.
+def match_pulldown_cpt_channels(pulldown_channels, cpt_channels, cpt_slot_labels=None):
+    cpt_slot_labels = cpt_slot_labels or {}
+    p_keys = [k for k in pulldown_channels if k != "S2"]
+    c_keys = list(cpt_channels.keys())
+    matched = [k for k in c_keys if k in set(p_keys)]
+    notes = []
+
+    def nice(k):
+        return f"{k} ({cpt_slot_labels[k]})" if k in cpt_slot_labels else k
+
+    only_cpt = [nice(k) for k in c_keys if k not in set(p_keys)]
+    only_pull = [k for k in p_keys if k not in set(c_keys)]
+    if not matched and (p_keys or c_keys):
+        notes.append("⚠️ No thermocouple is common to the Pulldown and CPT files — nothing can be matched.")
+    else:
+        if only_cpt:
+            notes.append(f"⚠️ In the CPT file only (not in Pulldown, so not matched): {', '.join(only_cpt)}")
+        if only_pull:
+            notes.append(f"⚠️ In the Pulldown file only (not in CPT, so not matched): {', '.join(only_pull)}")
+        if matched and not only_cpt and not only_pull:
+            notes.append(f"✅ All {len(matched)} thermocouples match between Pulldown and CPT.")
+    return matched, notes
+
 # Computes each cabinet's own average (e.g. "tf-a", "tc-a", "tvc-a") from
 # whichever channel_values slots actually got filled — never a fixed 5/3 count.
 # Returns {"tf-a": ..., ...} for every cabinet that had at least one matched channel.
@@ -854,25 +954,29 @@ def compute_cabinet_averages(channel_values, cabinet_config):
 
 
 # =================================================================
-def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, target_sensor_pairs, pulldown_feature_keys):
+def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, target_sensor_pairs, pulldown_feature_keys,
+                             sensor_names=None, target_sensor_points=None, cabinet_config=None):
     """
-    Generates a consolidated prediction dataframe where each Sensor Query Point produces
-    4 rows — Mean, Min, Max, (Max+Min)/2 — each predicted from that criteria's historical
-    data. S2 is only meaningful on the Mean row (it was only ever recorded there).
-    `pulldown_sensor` is the Pulldown-side Sensor reading (may be None if unavailable).
-    `target_sensor_pairs` is a list of (sensor_min, sensor_max) tuples, one per query point.
-    Each CPT criteria row is driven by its own matched Sensor feature:
-        Min row          -> Sensor Min reading
-        Max row          -> Sensor Max reading
-        Mean / (Max+Min)/2 -> average of Sensor Min and Sensor Max
+    Builds the consolidated prediction table. Every query point produces 4 rows —
+    Mean, Min, Max, (Max+Min)/2.
 
-    `pulldown_feature_keys` is the ordered list of pulldown channel keys (e.g.
-    ["tf-1",...,"tf-6","tc-1","tc-2","tc-3","tvc-1","tvc-2","tvc-3","S2"]) driven by
-    Cabinet Configuration — both `new_pulldown` (the live query) and each historical
-    record's pulldown_data are read using this same list, so their lengths always
-    match. For older records saved before a cabinet went multi-channel (e.g. a
-    legacy single "tvc" value instead of "tvc-1/2/3"), that legacy value is reused
-    for every slot of that cabinet as a reasonable stand-in.
+    How it predicts:
+      * Every thermocouple (tf-1.., tc-1.., tvc-1.., and extras like tf-6 = "tf Box")
+        gets its OWN nearest-neighbour model, trained only on the stored runs that
+        actually have that thermocouple.
+      * Each Sensor gets its own prediction run, using that sensor's Min/Max as the
+        driving feature (Min row -> Min, Max row -> Max, Mean and (Max+Min)/2 -> the
+        average of Min and Max).
+      * The per-sensor predictions are then averaged. A cabinet with sensors chosen in
+        the Cabinet & Sensor Configuration uses only those sensors; a cabinet with none
+        chosen (and S2) uses every sensor.
+
+    `sensor_names` + `target_sensor_points` ([{sensor: (min, max)}, ...] — one dict per
+    query point) switch on the multi-sensor mode. Without them the old single-sensor
+    call style (`target_sensor_pairs`) still works unchanged.
+    `pulldown_feature_keys` is the ordered list of pulldown channel keys used as the
+    context features for both the live query and every stored run; an older record
+    that only has a bare "tvc" reuses it for every tvc-N slot.
     """
     if not volume_records:
         return pd.DataFrame()
@@ -888,17 +992,12 @@ def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, targ
     def get_pulldown_feature_value(pulldown_data, key):
         if key in pulldown_data:
             return pulldown_data[key]
-        # Legacy fallback: a record saved before a cabinet went multi-channel may only
-        # have a bare "tvc" (no "-N") — reuse it for every slot of that cabinet.
         if '-' in key:
             legacy_key = key.rsplit('-', 1)[0]
             if legacy_key in pulldown_data:
                 return pulldown_data[legacy_key]
         return 0.0
 
-    # Rough per-level fallback when a historical Sensor reading is missing/zero — the same
-    # heuristic used elsewhere in this app, with a small offset for the Max variant so it
-    # doesn't collapse onto the exact same fallback as Min.
     def fallback_sensor(flag, offset=0.0):
         if "1" in flag: base = -27.5
         elif "2" in flag: base = -27.0
@@ -913,96 +1012,194 @@ def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, targ
             return sensor_min
         elif metric_key == "max":
             return sensor_max
-        else:  # "mean" and "(max+min)/2" both driven by the Min/Max average
-            return (sensor_min + sensor_max) / 2.0
+        return (sensor_min + sensor_max) / 2.0
 
-    base_fields = ["tf-1", "tf-2", "tf-3", "tf-4", "tf-5", "tc-1", "tc-2", "tc-3", "tvc"]
+    # ---- Which sensors / query points are we working with? ----
+    if sensor_names and target_sensor_points:
+        sensors = list(sensor_names)
+        points = [{s: pt.get(s, (0.0, 0.0)) for s in sensors} for pt in target_sensor_points]
+    else:
+        sensors = ["__single__"]
+        points = [{"__single__": pair} for pair in target_sensor_pairs]
+    primary_sensor = sensors[0]
+
+    def hist_sensor_pair(level_data, flag, sensor):
+        """Min/Max of `sensor` for one stored level, or None if this run has none."""
+        sdict = level_data.get("sensors") if isinstance(level_data, dict) else None
+        if sensor == "__single__":
+            pair = (level_data.get("Sensor", 0.0), level_data.get("SensorMax", 0.0))
+        elif sdict:
+            sd = sdict.get(sensor)
+            if not sd:
+                return None
+            pair = (sd.get("min", 0.0), sd.get("max", 0.0))
+        elif sensor == primary_sensor:      # old single-sensor record
+            pair = (level_data.get("Sensor", 0.0), level_data.get("SensorMax", 0.0))
+        else:
+            return None
+        mn, mx = clean_val(pair[0]), clean_val(pair[1])
+        if mn == 0.0: mn = fallback_sensor(flag, 0.0)
+        if mx == 0.0: mx = fallback_sensor(flag, 1.0)
+        return mn, mx
+
+    # ---- Which thermocouples will be predicted? ----
+    fixed_fields = ["tf-1", "tf-2", "tf-3", "tf-4", "tf-5", "tc-1", "tc-2", "tc-3", "tvc"]
+    extra_fields = set()
+    for record in volume_records:
+        for level_data in (record.get("cpt_data") or {}).values():
+            if not isinstance(level_data, dict):
+                continue
+            for mk in metric_types:
+                md = level_data.get(mk)
+                if isinstance(md, dict):
+                    for k in md:
+                        if re.match(r'^.+-\d+$', str(k)) and k not in fixed_fields:
+                            extra_fields.add(k)
+    target_fields = list(fixed_fields) + sorted(extra_fields)
+    # If individual tvc-1..N exist, the single "tvc" average column is redundant
+    if any(k.startswith("tvc-") for k in extra_fields) and "tvc" in target_fields:
+        target_fields.remove("tvc")
+
+    prefix_rank = {}
+    for i, p in enumerate((c["prefix"] for c in (cabinet_config or {}).get("cabinets", []))):
+        prefix_rank[p] = i
+    for p in ["tf", "tcc", "tc", "tvc"]:
+        prefix_rank.setdefault(p, len(prefix_rank))
+
+    def field_sort_key(k):
+        m = re.match(r'^(.+)-(\d+)$', k)
+        prefix, num = (m.group(1), int(m.group(2))) if m else (k, 0)
+        return (prefix_rank.get(prefix, 999), prefix, num)
+    target_fields.sort(key=field_sort_key)
+
+    def sensors_for_field(field):
+        """Sensors whose predictions are averaged for this thermocouple."""
+        if field == "S2" or not cabinet_config:
+            return None
+        prefix = field.rsplit('-', 1)[0] if '-' in field else field
+        for cab in cabinet_config.get("cabinets", []):
+            if cab.get("prefix") == prefix:
+                chosen = (cabinet_config.get("cabinet_sensor_map") or {}).get(cab["name"]) or []
+                chosen = [s for s in chosen if s in sensors]
+                return chosen or None
+        return None
+
+    def predict_one(metric_key, sensor, q_min, q_max):
+        """{field: predicted value} for one sensor, or {} if no usable stored runs."""
+        X, Y = [], []
+        for record in volume_records:
+            if not record.get('cpt_data'):
+                continue
+            p_features = [clean_val(get_pulldown_feature_value(record["pulldown_data"], f)) for f in pulldown_feature_keys]
+            p_baseline = clean_val(record.get("pulldown_baseline_sensor", 0.0))
+            for flag, level_data in record["cpt_data"].items():
+                metric_data = level_data.get(metric_key) if isinstance(level_data, dict) else None
+                if not metric_data:
+                    continue
+                pair = hist_sensor_pair(level_data, flag, sensor)
+                if pair is None:
+                    continue
+                X.append(p_features + [p_baseline, feature_for_metric(metric_key, pair[0], pair[1])])
+                targets = {f: clean_val(metric_data.get(f, 0.0)) for f in fixed_fields}
+                targets.update({k: clean_val(v) for k, v in metric_data.items() if k in extra_fields})
+                if metric_key == "mean":
+                    targets["S2"] = clean_val(level_data.get("S2", 0.0))
+                Y.append(targets)
+        if not X:
+            return {}
+        X_arr = np.nan_to_num(np.array(X, dtype=np.float64), nan=0.0)
+        q = np.nan_to_num(np.array(
+            [clean_val(v) for v in new_pulldown] + [clean_val(pulldown_sensor), feature_for_metric(metric_key, q_min, q_max)],
+            dtype=np.float64).reshape(1, -1), nan=0.0)
+        fields = target_fields + (["S2"] if metric_key == "mean" else [])
+        out = {}
+        for field in fields:
+            rows = [i for i, t in enumerate(Y) if field in t]
+            if not rows:
+                continue
+            y = np.array([Y[i][field] for i in rows], dtype=np.float64)
+            knn = KNeighborsRegressor(n_neighbors=min(3, len(rows)), weights='distance')
+            knn.fit(X_arr[rows], y)
+            out[field] = float(knn.predict(q)[0])
+        return out
 
     predicted_rows = []
-
-    # Process each user manual query point, once per criteria (Mean/Min/Max/(Max+Min)/2)
-    for query_min, query_max in target_sensor_pairs:
-        query_min = clean_val(query_min)
-        query_max = clean_val(query_max)
+    for point in points:
+        point = {s: (clean_val(pt[0]), clean_val(pt[1])) for s, pt in point.items()}
+        if sensors == ["__single__"]:
+            label = f"Min {point['__single__'][0]:.1f}°C / Max {point['__single__'][1]:.1f}°C"
+        else:
+            label = " | ".join(f"{s}: Min {mn:.1f}°C / Max {mx:.1f}°C" for s, (mn, mx) in point.items())
 
         for metric_key in metric_types:
-            X_train = []
-            y_train = []
+            per_sensor = {}
+            for s in sensors:
+                res = predict_one(metric_key, s, point[s][0], point[s][1])
+                if res:
+                    per_sensor[s] = res
+            if not per_sensor:
+                continue
 
-            for record in volume_records:
-                if 'cpt_data' not in record or not record['cpt_data']:
-                    continue
-
-                # Pulldown base features — dynamic per Cabinet Configuration, with a
-                # legacy-value fallback for older records saved before this system existed
-                p_features = [clean_val(get_pulldown_feature_value(record["pulldown_data"], f)) for f in pulldown_feature_keys]
-                p_baseline = clean_val(record.get("pulldown_baseline_sensor", 0.0))
-
-                # Treat each flag/level as a distinct data point to capture variance across sensor points
-                for flag, level_data in record["cpt_data"].items():
-                    metric_data = level_data.get(metric_key) if isinstance(level_data, dict) else None
-                    if not metric_data:
-                        continue
-
-                    # Historical Sensor Min/Max for this level, with fallback if missing/zero
-                    hist_sensor_min = clean_val(level_data.get("Sensor", 0.0))
-                    if hist_sensor_min == 0.0:
-                        hist_sensor_min = fallback_sensor(flag, offset=0.0)
-                    hist_sensor_max = clean_val(level_data.get("SensorMax", 0.0))
-                    if hist_sensor_max == 0.0:
-                        hist_sensor_max = fallback_sensor(flag, offset=1.0)
-
-                    hist_feature = feature_for_metric(metric_key, hist_sensor_min, hist_sensor_max)
-
-                    # Formulate training input: Pulldown context matrix + this level's matched sensor feature
-                    train_input = p_features + [p_baseline, hist_feature]
-
-                    # Target output values to be predicted for this criteria (tf-1..5, tc-1..3, tvc)
-                    train_target = [clean_val(metric_data.get(f, 0.0)) for f in base_fields]
-                    # S2 was only ever recorded on the Mean row, so only train/predict it there
-                    if metric_key == "mean":
-                        train_target = train_target + [clean_val(level_data.get("S2", 0.0))]
-
-                    X_train.append(train_input)
-                    y_train.append(train_target)
-
-            if len(X_train) >= 1:
-                X_arr = np.nan_to_num(np.array(X_train, dtype=np.float64), nan=0.0)
-                y_arr = np.nan_to_num(np.array(y_train, dtype=np.float64), nan=0.0)
-
-                # Construct active query: current telemetry + this query point's matched sensor feature
-                current_baseline = clean_val(pulldown_sensor)
-                query_feature = feature_for_metric(metric_key, query_min, query_max)
-                query_vector = np.nan_to_num(
-                    np.array([clean_val(v) for v in new_pulldown] + [current_baseline, query_feature], dtype=np.float64).reshape(1, -1),
-                    nan=0.0
-                )
-
-                # Run distance-weighted interpolation to compute dynamic shift across query points
-                knn = KNeighborsRegressor(n_neighbors=min(3, len(X_arr)), weights='distance')
-                knn.fit(X_arr, y_arr)
-
-                prediction = knn.predict(query_vector)[0]
-
-                row = {
-                    "Sensor Value": f"Min {query_min:.1f}°C / Max {query_max:.1f}°C",
-                    "Metric": metric_labels[metric_key],
-                    "tf-1": round(prediction[0], 1),
-                    "tf-2": round(prediction[1], 1),
-                    "tf-3": round(prediction[2], 1),
-                    "tf-4": round(prediction[3], 1),
-                    "tf-5": round(prediction[4], 1),
-                    "tc-1": round(prediction[5], 1),
-                    "tc-2": round(prediction[6], 1),
-                    "tc-3": round(prediction[7], 1),
-                    "tvc": round(prediction[8], 1),
-                    "S2": round(prediction[9], 1) if metric_key == "mean" else np.nan
-                }
-                predicted_rows.append(row)
+            row = {"Sensor Value": label, "Metric": metric_labels[metric_key]}
+            for field in target_fields:
+                use = sensors_for_field(field)
+                vals = [per_sensor[s][field] for s in per_sensor
+                        if (use is None or s in use) and field in per_sensor[s]]
+                if not vals:  # chosen sensors have no data -> fall back to every sensor
+                    vals = [per_sensor[s][field] for s in per_sensor if field in per_sensor[s]]
+                if vals:
+                    row[field] = round(sum(vals) / len(vals), 1)
+            if metric_key == "mean":
+                s2_vals = [per_sensor[s]["S2"] for s in per_sensor if "S2" in per_sensor[s]]
+                row["S2"] = round(sum(s2_vals) / len(s2_vals), 1) if s2_vals else np.nan
+            else:
+                row["S2"] = np.nan
+            predicted_rows.append(row)
 
     if predicted_rows:
         return pd.DataFrame(predicted_rows)
     return pd.DataFrame()
+
+
+# =================================================================
+# Checkpoint-refined predictions.
+# Elaborated Pulldown reports contain named checkpoint columns ("Hr: 1.0",
+# "tfa: -6.0", "tca: 8.0", ...) = the thermocouple readings at that moment of the
+# pulldown. For every checkpoint that exists in BOTH the new Pulldown file and at
+# least one stored run, this repeats the normal prediction using that checkpoint's
+# readings (instead of the average readings) as the pulldown features, trained only
+# on the stored runs that also have that checkpoint.
+# "Support" = how many stored runs have the checkpoint; it decides the confidence
+# label. Results come back sorted by support (then by number of thermocouples used).
+# The normal (average-based) prediction is unchanged and stays the baseline.
+# =================================================================
+def run_checkpoint_refined_simulations(volume_records, new_checkpoints, pulldown_sensor, target_sensor_pairs,
+                                       sensor_names=None, target_sensor_points=None, cabinet_config=None):
+    results = []
+    for cp_name, new_cp in (new_checkpoints or {}).items():
+        supporters = [r for r in volume_records
+                      if r.get("cpt_data") and isinstance(r.get("pulldown_checkpoints"), dict)
+                      and cp_name in r["pulldown_checkpoints"]]
+        if not supporters:
+            continue
+        common = [k for k in new_cp if all(k in r["pulldown_checkpoints"][cp_name] for r in supporters)]
+        if not common:
+            continue
+        pseudo_records = [{
+            "pulldown_data": {k: r["pulldown_checkpoints"][cp_name][k] for k in common},
+            "pulldown_baseline_sensor": r.get("pulldown_baseline_sensor", 0.0),
+            "cpt_data": r["cpt_data"],
+        } for r in supporters]
+        df = run_automated_simulation(
+            pseudo_records, [new_cp[k] for k in common], pulldown_sensor, target_sensor_pairs, common,
+            sensor_names=sensor_names, target_sensor_points=target_sensor_points, cabinet_config=cabinet_config)
+        if df.empty:
+            continue
+        n = len(supporters)
+        confidence = "High" if n >= 3 else ("Medium" if n == 2 else "Low")
+        results.append({"name": cp_name, "support": n, "confidence": confidence, "channels": len(common), "df": df})
+    results.sort(key=lambda r: (-r["support"], -r["channels"], r["name"]))
+    return results
 
 
 # =================================================================
@@ -1120,7 +1317,7 @@ with tab1:
     with c1:
         sim_p_ambient = st.selectbox("Select Target Pulldown Ambient:", ["32°C", "43°C"], key="sim_p_amb")
     with c2:
-        sim_c_ambient = st.selectbox("Select Target Respected CPT Ambient:", ["16°C", "32°C", "43°C"], key="sim_c_amb")
+        sim_c_ambient = st.selectbox("Select Target Respected CPT Ambient:", ["16°C", "32°C", "43°C"], index=1, key="sim_c_amb")
         
     p_key = "32C" if "32" in sim_p_ambient else "43C"
     c_key = "16C" if "16" in sim_c_ambient else ("32C" if "32" in sim_c_ambient else "43C")
@@ -1176,9 +1373,12 @@ with tab1:
                 st.session_state.active_pulldown_form['_cabinet_notifications'] = _sim_cab_notifications
                 st.session_state.active_pulldown_form['_slot_labels'] = _sim_slot_labels
 
-                # S2 is not part of the cabinet system — same handling as always
+                # S2 is not part of the cabinet system. If the new file has no S2, drop any
+                # value left over from a previous upload so the field shows empty/required.
                 if 's2' in sheet_data:
                     st.session_state.active_pulldown_form['S2'] = sheet_data['s2']
+                else:
+                    st.session_state.active_pulldown_form.pop('S2', None)
 
                 # Sensor is tracked separately from the cabinet channels — only set if the
                 # uploaded file actually has a "Sensor" reading; otherwise leave it absent
@@ -1194,6 +1394,7 @@ with tab1:
                 _sim_entry_code, _sim_test_id = extract_pulldown_entry_test_id(sim_pulldown_file)
                 st.session_state.active_pulldown_form['_entry_code'] = _sim_entry_code
                 st.session_state.active_pulldown_form['_test_id'] = _sim_test_id
+                st.session_state.active_pulldown_form['_checkpoints'] = extract_pulldown_checkpoints(sim_pulldown_file)
 
                 st.session_state.last_uploaded_sim_file = sim_pulldown_file
                 # Increment key version to instantly clear old component cache and force update UI inputs
@@ -1220,7 +1421,7 @@ with tab1:
             st.caption(_note)
 
         _slot_labels = st.session_state.active_pulldown_form.get('_slot_labels', {})
-        default_defaults = {'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 'tc-2': 1.6, 'tc-3': 0.5, 'S2': 41.1}
+        default_defaults = {'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 'tc-2': 1.6, 'tc-3': 0.5}
 
         new_pulldown_input = []
         CHUNK_SIZE = 8
@@ -1231,6 +1432,8 @@ with tab1:
                 # Prioritize extracted file data if available, otherwise use defaults
                 if feat in st.session_state.active_pulldown_form:
                     curr_val = round(float(st.session_state.active_pulldown_form[feat]), 1)
+                elif feat == 'S2':
+                    curr_val = None  # required: no fabricated default, must come from the file or be typed
                 else:
                     curr_val = default_defaults.get(feat, 0.0)
 
@@ -1243,9 +1446,13 @@ with tab1:
                     value=curr_val,
                     step=0.1,
                     format="%.1f",
+                    placeholder="Required" if feat == 'S2' else None,
                     key=f"sim_inp_{p_key}_{c_key}_{feat}_v{st.session_state.sim_ver}"
                 )
                 new_pulldown_input.append(val)
+
+        if 'S2' in pulldown_feature_keys and new_pulldown_input[pulldown_feature_keys.index('S2')] is None:
+            st.caption(":red[⚠️ S2 was not found in the uploaded pulldown file — enter it above, or upload a corrected file. Predictions are blocked until S2 is provided.]")
 
         # Sensor is a genuinely distinct reading (from the pulldown file's own "Sensor" row),
         # kept separate from the 10 fields above. Same behavior as tf-1..S2: auto-filled and
@@ -1304,9 +1511,8 @@ with tab1:
         if len(sensor_names_for_tab1) > 1:
             st.caption(
                 f"Training data has {len(sensor_names_for_tab1)} sensors: {', '.join(sensor_names_for_tab1)}. "
-                f"Each query point needs a Min and Max reading per sensor. For now, only "
-                f"'{sensor_names_for_tab1[0]}' drives the prediction — full multi-sensor "
-                f"prediction is a later step; the rest are collected but not yet used."
+                f"Each query point needs a Min and Max reading per sensor. Each sensor is predicted separately "
+                f"and the results are averaged."
             )
         else:
             st.caption("Each query point needs a Sensor Min and Sensor Max reading.")
@@ -1344,17 +1550,60 @@ with tab1:
             target_sensor_pairs_all.append(point_pairs)
             
         if st.button("🚀 Generate Predictive CPT Dataset Matrices", type="primary"):
+            _missing_inputs = []
             if new_pulldown_sensor is None:
-                st.warning("⚠️ Sensor value is empty — predictions will be generated using 0.0 °C for the Pulldown Sensor feature, which may reduce accuracy.")
-            with st.spinner("Processing automated interpolation runs..."):
-                df_final_predictions = run_automated_simulation(vol_records, new_pulldown_input, new_pulldown_sensor, target_sensor_pairs, pulldown_feature_keys)
-                
-                if df_final_predictions.empty:
-                    st.error("Simulation engine run failed. Make sure dataset memory contains recorded instances.")
-                else:
-                    st.markdown("### 📊 Consolidated Predictive Simulation Output Matrix")
-                    df_final_predictions = round_df(add_avg_columns(df_final_predictions))
-                    st.markdown(render_merged_predictions_table(df_final_predictions), unsafe_allow_html=True)
+                _missing_inputs.append("Sensor")
+            if 'S2' in pulldown_feature_keys and new_pulldown_input[pulldown_feature_keys.index('S2')] is None:
+                _missing_inputs.append("S2")
+
+            if _missing_inputs:
+                st.error(
+                    f"❌ Cannot predict: {' and '.join(_missing_inputs)} value is missing. "
+                    f"Enter it in the highlighted field above, or rework the pulldown file so it contains it, then try again."
+                )
+            else:
+                with st.spinner("Processing automated interpolation runs..."):
+                    df_final_predictions = run_automated_simulation(
+                        vol_records, new_pulldown_input, new_pulldown_sensor, target_sensor_pairs, pulldown_feature_keys,
+                        sensor_names=sensor_names_for_tab1, target_sensor_points=target_sensor_pairs_all,
+                        cabinet_config=get_cabinet_sensor_config(selected_volume, selected_arrangement)
+                    )
+
+                    if df_final_predictions.empty:
+                        st.error("Simulation engine run failed. Make sure dataset memory contains recorded instances.")
+                    else:
+                        st.markdown("### 📊 Consolidated Predictive Simulation Output Matrix")
+                        df_final_predictions = round_df(add_avg_columns(df_final_predictions))
+                        st.markdown(render_merged_predictions_table(df_final_predictions), unsafe_allow_html=True)
+
+                        # ---- Checkpoint-refined predictions (optional extra, baseline above is unchanged) ----
+                        _new_cps = st.session_state.active_pulldown_form.get('_checkpoints') or {}
+                        _stored_have_cps = any(r.get("pulldown_checkpoints") for r in vol_records)
+                        if _new_cps and _stored_have_cps:
+                            with st.spinner("Refining with Pulldown checkpoints..."):
+                                _cp_results = run_checkpoint_refined_simulations(
+                                    vol_records, _new_cps, new_pulldown_sensor, target_sensor_pairs,
+                                    sensor_names=sensor_names_for_tab1, target_sensor_points=target_sensor_pairs_all,
+                                    cabinet_config=get_cabinet_sensor_config(selected_volume, selected_arrangement))
+                            if _cp_results:
+                                st.markdown("### 📍 Checkpoint-Refined Predictions")
+                                st.caption(
+                                    "Each block repeats the prediction using the readings at one Pulldown checkpoint. "
+                                    "Confidence depends on how many stored runs contain that same checkpoint "
+                                    "(3 or more = High, 2 = Medium, 1 = Low). Sorted with the best-supported first."
+                                )
+                                for _res in _cp_results:
+                                    _icon = {"High": "🟢", "Medium": "🟡", "Low": "🟠"}[_res["confidence"]]
+                                    with st.expander(
+                                        f"{_icon} {_res['name']} — {_res['confidence']} confidence "
+                                        f"({_res['support']} stored run(s), {_res['channels']} thermocouples used)"
+                                    ):
+                                        _cp_df = round_df(add_avg_columns(_res["df"]))
+                                        st.markdown(render_merged_predictions_table(_cp_df), unsafe_allow_html=True)
+                            else:
+                                st.info("📍 No checkpoint in this Pulldown file matches a checkpoint stored in your training runs, so no refined prediction was made.")
+                        elif _new_cps and not _stored_have_cps:
+                            st.info("📍 This Pulldown file has checkpoints, but none of your stored training runs do — only the normal prediction is shown.")
 
 # ================= TAB 2: DATA REPOSITORY ROOM =================
 with tab2:
@@ -1486,7 +1735,7 @@ with tab2:
     with repo_c1:
         repo_p_ambient = st.selectbox("Source Pulldown File Ambient Layer:", ["32°C", "43°C"], key="repo_p_amb")
     with repo_c2:
-        repo_c_ambient = st.selectbox("Source Connected CPT File Ambient Layer:", ["16°C", "32°C", "43°C"], key="repo_c_amb")
+        repo_c_ambient = st.selectbox("Source Connected CPT File Ambient Layer:", ["16°C", "32°C", "43°C"], index=1, key="repo_c_amb")
         
     p_repo_key = "32C" if "32" in repo_p_ambient else "43C"
     c_repo_key = "16C" if "16" in repo_c_ambient else ("32C" if "32" in repo_c_ambient else "43C")
@@ -1583,6 +1832,7 @@ with tab2:
                     test_id = pulldown_test_id
                 
                 # 2. PARSE CPT DATA
+                cpt_match_notes = []   # Pulldown <-> CPT thermocouple matching messages
                 cpt_structured = {}
                 parsed_successfully = False
 
@@ -1781,6 +2031,14 @@ with tab2:
                         # Sensor/SensorMax fields, for backward compatibility
                         primary_sensor_name_a2 = min(sensor_cols_a2, key=sensor_cols_a2.get) if sensor_cols_a2 else None
 
+                        # Dynamic thermocouple detection from the CPT header rows, matched
+                        # against the Pulldown file's thermocouples (same cabinet rules)
+                        _first_sensor_col_a2 = min(all_cpt_sensor_cols_a2.values()) if all_cpt_sensor_cols_a2 else min(ws_a2.max_column, 30) + 1
+                        cpt_channel_cols_a2 = detect_cpt_channel_columns(ws_a2, header_row_a2, dc_col_a2 + 1, _first_sensor_col_a2 - 1)
+                        _cab_cfg_a2 = get_cabinet_sensor_config(selected_volume, selected_arrangement)
+                        _cpt_match_done_a2 = False
+                        _pulldown_slots_a2 = set(k for k in p_extracted if k != "S2")
+
                         cpt_structured = {}
                         current_flag_a2 = None
                         for data_row in range(header_row_a2 + 2, ws_a2.max_row + 1):
@@ -1810,6 +2068,16 @@ with tab2:
                                     "tc-3": safe_float_a2(ws_a2.cell(data_row, tc_cols_a2[2]).value),
                                     "tvc": round(sum(safe_float_a2(ws_a2.cell(data_row, c).value) for c in tvc_cols_a2) / 3, 1),
                                 }
+                                # Extra thermocouples (tf Box -> tf-6, tvc-1..3, ...) that are
+                                # present in BOTH files are stored next to the fixed ones
+                                _row_ch, _row_notes, _row_labels = extract_cpt_row_channels(ws_a2, data_row, cpt_channel_cols_a2, _cab_cfg_a2)
+                                if not _cpt_match_done_a2:
+                                    _, _m_notes = match_pulldown_cpt_channels(p_extracted, _row_ch, _row_labels)
+                                    cpt_match_notes.extend([n for n in _row_notes if n.startswith('ℹ️')] + _m_notes)  # per-cabinet 'not found' warnings are covered by the match notes
+                                    _cpt_match_done_a2 = True
+                                for _k, _v in _row_ch.items():
+                                    if _k in _pulldown_slots_a2 and _k not in cpt_structured[current_flag_a2][crit]:
+                                        cpt_structured[current_flag_a2][crit][_k] = _v
                                 if crit == "mean":
                                     cpt_structured[current_flag_a2]["S2"] = safe_float_a2(ws_a2.cell(data_row, s2_col_a2).value)
                                 elif crit in ("min", "max"):
@@ -1920,6 +2188,21 @@ with tab2:
                 if not parsed_successfully or not cpt_structured:
                     raise ValueError("CPT processing pipeline failed. Spreadsheet structural pattern unknown.")
 
+                # Sensor and S2 are required in BOTH files — without them the record can't
+                # be used for prediction, so nothing is saved until the file is reworked.
+                _missing_report = []
+                if resolved_sensor is None:
+                    _missing_report.append("Sensor is missing from the Pulldown file")
+                if 's2' not in sheet_data:
+                    _missing_report.append("S2 is missing from the Pulldown file")
+                if not cpt_has_sensor_data(cpt_structured):
+                    _missing_report.append("Sensor is missing from the CPT file (or no sensor name matched the Pulldown file)")
+                if not cpt_has_s2_data(cpt_structured):
+                    _missing_report.append("S2 is missing from the CPT file")
+                if _missing_report:
+                    st.error("❌ Nothing was saved. Please rework the file(s) and upload again:\n\n" + "\n".join(f"- {m}" for m in _missing_report))
+                    st.stop()
+
                 new_block = {
                     "pulldown_baseline_sensor": resolved_sensor,
                     "original_pulldown_baseline_sensor": resolved_sensor,
@@ -1943,6 +2226,8 @@ with tab2:
                 
                 st.success(f"🚀 Model Simulator Trained successfully! Hard-Backup saved to storage.")
                 for _note in cabinet_notifications:
+                    st.caption(_note)
+                for _note in cpt_match_notes:
                     st.caption(_note)
                 if pulldown_checkpoints:
                     st.info(f"📍 Also captured {len(pulldown_checkpoints)} named checkpoint(s) from the Pulldown file: {', '.join(pulldown_checkpoints.keys())}")
@@ -2097,30 +2382,57 @@ with tab3:
 
                     def build_cpt_rows(cpt_data_dict):
                         rows = []
+                        sensor_names_here = sensor_names_in_cpt_data(cpt_data_dict)
+                        # Thermocouple columns: the 9 classic ones, plus any extra stored for this
+                        # record (e.g. tf-6 = "tf Box", tvc-1..3). If individual tvc-N values exist
+                        # the single "tvc" average column is replaced by them (tvc-a is computed).
+                        fixed_cols = ["tf-1", "tf-2", "tf-3", "tf-4", "tf-5", "tc-1", "tc-2", "tc-3", "tvc"]
+                        extra_cols = set()
+                        for _blk in cpt_data_dict.values():
+                            if not isinstance(_blk, dict):
+                                continue
+                            for _mk in metric_types:
+                                for _k in (_blk.get(_mk) or {}):
+                                    if re.match(r'^.+-\d+$', str(_k)) and _k not in fixed_cols:
+                                        extra_cols.add(_k)
+                        chan_cols = fixed_cols + sorted(extra_cols)
+                        if any(k.startswith("tvc-") for k in extra_cols):
+                            chan_cols.remove("tvc")
+                        _rank = {"tf": 0, "tcc": 1, "tc": 2, "tvc": 3}
+                        def _ch_key(k):
+                            m = re.match(r'^(.+)-(\d+)$', k)
+                            p, n = (m.group(1), int(m.group(2))) if m else (k, 0)
+                            return (_rank.get(p, 99), p, n)
+                        chan_cols.sort(key=_ch_key)
                         for flag_name, flag_block in cpt_data_dict.items():
                             for metric_key in metric_types:
                                 metric_data = flag_block.get(metric_key) if isinstance(flag_block, dict) else None
                                 if not metric_data:
                                     continue
-                                rows.append({
-                                    "Test Flag": flag_name,
-                                    "Metric": metric_labels[metric_key],
-                                    "tf-1": metric_data.get("tf-1", 0.0),
-                                    "tf-2": metric_data.get("tf-2", 0.0),
-                                    "tf-3": metric_data.get("tf-3", 0.0),
-                                    "tf-4": metric_data.get("tf-4", 0.0),
-                                    "tf-5": metric_data.get("tf-5", 0.0),
-                                    "tc-1": metric_data.get("tc-1", 0.0),
-                                    "tc-2": metric_data.get("tc-2", 0.0),
-                                    "tc-3": metric_data.get("tc-3", 0.0),
-                                    "tvc": metric_data.get("tvc", 0.0),
-                                    "S2": flag_block.get("S2", 0.0) if metric_key == "mean" else np.nan,
-                                    "Sensor": (
+                                row = {"Test Flag": flag_name, "Metric": metric_labels[metric_key]}
+                                for _c in chan_cols:
+                                    row[_c] = metric_data.get(_c, 0.0 if _c in fixed_cols else np.nan)
+                                row["S2"] = flag_block.get("S2", 0.0) if metric_key == "mean" else np.nan
+                                if sensor_names_here:
+                                    # Dynamic multi-sensor record — one column per sensor name,
+                                    # each showing its Min value on the Min row, Max on the Max
+                                    # row, and blank elsewhere (same per-row convention as before)
+                                    for sname in sensor_names_here:
+                                        sdata = flag_block.get("sensors", {}).get(sname, {})
+                                        if metric_key == "min":
+                                            row[sname] = sdata.get("min", np.nan)
+                                        elif metric_key == "max":
+                                            row[sname] = sdata.get("max", np.nan)
+                                        else:
+                                            row[sname] = np.nan
+                                else:
+                                    # Legacy record with no "sensors" dict — keep the old single column
+                                    row["Sensor"] = (
                                         flag_block.get("Sensor", 0.0) if metric_key == "min"
                                         else flag_block.get("SensorMax", 0.0) if metric_key == "max"
                                         else np.nan
-                                    ),
-                                })
+                                    )
+                                rows.append(row)
                         return rows
 
                     cpt_rows = build_cpt_rows(record["cpt_data"])
@@ -2199,6 +2511,9 @@ with tab3:
 
                             # Save CPT Matrix — reassemble the 4 rows per flag back into the nested structure
                             label_to_key = {v: k for k, v in metric_labels.items()}
+                            # Sensor names this record's table was built with (empty for legacy
+                            # single-sensor records, which use the plain "Sensor" column instead)
+                            sensor_names_saved = sensor_names_in_cpt_data(record["cpt_data"])
                             new_cpt = {}
                             for _, row in edited_cpt_df.iterrows():
                                 flag = row["Test Flag"]
@@ -2206,27 +2521,43 @@ with tab3:
 
                                 if flag not in new_cpt:
                                     new_cpt[flag] = {"S2": 0.0, "Sensor": 0.0, "SensorMax": 0.0}
+                                    if sensor_names_saved:
+                                        new_cpt[flag]["sensors"] = {sn: {"min": 0.0, "max": 0.0} for sn in sensor_names_saved}
 
-                                new_cpt[flag][metric_key] = {
-                                    "tf-1": float(row["tf-1"]),
-                                    "tf-2": float(row["tf-2"]),
-                                    "tf-3": float(row["tf-3"]),
-                                    "tf-4": float(row["tf-4"]),
-                                    "tf-5": float(row["tf-5"]),
-                                    "tc-1": float(row["tc-1"]),
-                                    "tc-2": float(row["tc-2"]),
-                                    "tc-3": float(row["tc-3"]),
-                                    "tvc": float(row["tvc"]),
-                                }
+                                _skip_cols = {"Test Flag", "Metric", "S2", "Sensor"} | set(sensor_names_saved) | set(avg_column_names(edited_cpt_df.drop(columns=list(sensor_names_saved), errors="ignore")))
+                                _chan_saved = {}
+                                for _c in edited_cpt_df.columns:
+                                    if _c in _skip_cols:
+                                        continue
+                                    if pd.notna(row[_c]):
+                                        _chan_saved[_c] = float(row[_c])
+                                # Keep the single "tvc" average in step when only tvc-1..N are shown
+                                if "tvc" not in _chan_saved:
+                                    _tvc_parts = [v for k, v in _chan_saved.items() if k.startswith("tvc-")]
+                                    if _tvc_parts:
+                                        _chan_saved["tvc"] = round(sum(_tvc_parts) / len(_tvc_parts), 1)
+                                new_cpt[flag][metric_key] = _chan_saved
                                 if metric_key == "mean" and pd.notna(row["S2"]):
                                     new_cpt[flag]["S2"] = float(row["S2"])
                                 # The Sensor column is now a single field, populated per-row:
                                 # its value on the Min row is the Sensor Min reading, and on the
                                 # Max row is the Sensor Max reading — route each back accordingly.
-                                if metric_key == "min" and pd.notna(row["Sensor"]):
-                                    new_cpt[flag]["Sensor"] = float(row["Sensor"])
-                                if metric_key == "max" and pd.notna(row["Sensor"]):
-                                    new_cpt[flag]["SensorMax"] = float(row["Sensor"])
+                                if sensor_names_saved:
+                                    # Dynamic multi-sensor record: each sensor column's value on the
+                                    # Min row is that sensor's Min, on the Max row its Max
+                                    for sn in sensor_names_saved:
+                                        if sn in row.index and pd.notna(row[sn]) and metric_key in ("min", "max"):
+                                            new_cpt[flag]["sensors"][sn][metric_key] = float(row[sn])
+                                    # Keep the legacy Sensor/SensorMax in step with the primary
+                                    # (first) sensor, which is what today's prediction reads
+                                    primary_block = new_cpt[flag]["sensors"][sensor_names_saved[0]]
+                                    new_cpt[flag]["Sensor"] = primary_block["min"]
+                                    new_cpt[flag]["SensorMax"] = primary_block["max"]
+                                else:
+                                    if metric_key == "min" and "Sensor" in row.index and pd.notna(row["Sensor"]):
+                                        new_cpt[flag]["Sensor"] = float(row["Sensor"])
+                                    if metric_key == "max" and "Sensor" in row.index and pd.notna(row["Sensor"]):
+                                        new_cpt[flag]["SensorMax"] = float(row["Sensor"])
                             record["cpt_data"] = new_cpt
 
                             # Commit file data structure changes to the physical disk 

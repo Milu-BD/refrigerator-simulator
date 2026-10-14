@@ -1817,7 +1817,10 @@ with tab2:
                         colA = "" if colA is None else str(colA).strip()
                         colB = "" if colB is None else str(colB).strip().lower()
 
-                        if "level" in colA.lower() or "boost" in colA.lower():
+                        # Any text in the first column starts a new Test Flag, kept exactly as written
+                        # in the file (e.g. "level-3", "boost cooling", "Th-2", "Th-1"). Blank cells and
+                        # a bare 0 are not flags.
+                        if colA and colA.lower() not in ("0", "0.0", "nan", "none"):
                             current_flag = colA
                             if current_flag not in cpt_structured:
                                 cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0, "SensorMax": 0.0}
@@ -2067,7 +2070,7 @@ with tab2:
                         current_flag = "Unknown"
                         for idx, r in df_cpt_seg.iterrows():
                             val_0 = str(r.iloc[0]).strip()
-                            if pd.notna(r.iloc[0]) and ("level" in val_0.lower() or "boost" in val_0.lower()):
+                            if pd.notna(r.iloc[0]) and ("level" in val_0.lower() or "boost" in val_0.lower() or val_0.lower().startswith("th-")):
                                 current_flag = val_0
                                 if current_flag not in cpt_structured: cpt_structured[current_flag] = {"S2": 0.0, "Sensor": 0.0, "SensorMax": 0.0, "mean": {}}
                                 continue

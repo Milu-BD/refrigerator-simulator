@@ -289,86 +289,6 @@ def extract_pulldown_entry_test_id(uploaded_file):
             uploaded_file.seek(0)
     return entry_code, test_id
 
-# Scans an elaborated Pulldown report (channel names in column A, a header row with
-# Avg/Min/Max plus any number of named checkpoint columns like "tfa: -6.0", "tca: 8.0",
-# or "Hr: 0.5") and returns {checkpoint_name: {channel_key: value}}. Returns {} for
-# simple 2-column or Summary-style files with no such header — those keep working
-# through the existing Avg-only baseline path, unaffected.
-#
-# A checkpoint column is any header cell containing a colon, other than the bare
-# "avg"/"min"/"max" labels — this makes the checkpoint set fully dynamic. Files can
-# have more, fewer, or differently-named checkpoints (e.g. a future "tvca: 5.0")
-# with no code change needed here.
-def extract_pulldown_checkpoints(uploaded_file):
-    try:
-        uploaded_file.seek(0)
-        wb = openpyxl.load_workbook(uploaded_file, data_only=True)
-        ws = wb[wb.sheetnames[0]]
-    except Exception:
-        return {}
-    finally:
-        try:
-            uploaded_file.seek(0)
-        except Exception:
-            pass
-
-    # Find the header row: the one row containing both a literal "avg" and "min" cell
-    header_row = None
-    checkpoint_cols = {}
-    for r in range(1, min(ws.max_row, 60) + 1):
-        row_texts = {}
-        for c in range(1, min(ws.max_column, 40) + 1):
-            v = ws.cell(r, c).value
-            if isinstance(v, str) and v.strip():
-                row_texts[c] = v.strip()
-        lowered = {c: t.lower() for c, t in row_texts.items()}
-        if any(t == "avg" for t in lowered.values()) and any(t == "min" for t in lowered.values()):
-            header_row = r
-            for c, t in row_texts.items():
-                if ":" in t:
-                    checkpoint_cols[c] = t
-            break
-
-    if header_row is None or not checkpoint_cols:
-        return {}
-
-    # Collect each channel's value under every checkpoint column, using the same
-    # channel-name normalization the rest of the app already uses
-    raw_checkpoints = {}
-    for r in range(header_row + 1, min(ws.max_row, header_row + 60) + 1):
-        chan_raw = ws.cell(r, 1).value
-        if chan_raw is None or not isinstance(chan_raw, str) or not chan_raw.strip():
-            continue
-        chan_norm = normalize_sensor_name(chan_raw)
-        for col_idx, cp_name in checkpoint_cols.items():
-            val = ws.cell(r, col_idx).value
-            if val is None:
-                continue
-            try:
-                val_f = round(float(val), 1)
-            except (ValueError, TypeError):
-                continue
-            raw_checkpoints.setdefault(cp_name, {})[chan_norm] = val_f
-
-    # Translate normalized channel names (tf1, tc1, tvc1...) into the app's standard
-    # keys (tf-1, tc-1, tvc), same mapping used for the baseline Avg extraction
-    mapping_keys = {
-        'tf-1': 'tf1', 'tf-2': 'tf2', 'tf-3': 'tf3', 'tf-4': 'tf4', 'tf-5': 'tf5',
-        'tc-1': 'tc1', 'tc-2': 'tc2', 'tc-3': 'tc3', 'S2': 's2'
-    }
-    result = {}
-    for cp_name, chan_vals in raw_checkpoints.items():
-        entry = {}
-        for target_key, norm_label in mapping_keys.items():
-            if norm_label in chan_vals:
-                entry[target_key] = chan_vals[norm_label]
-        tvc_vals = [chan_vals[l] for l in ['tvc1', 'tvc2', 'tvc3'] if l in chan_vals]
-        if tvc_vals:
-            entry['tvc'] = round(sum(tvc_vals) / len(tvc_vals), 1)
-        if entry:  # only keep checkpoints that yielded at least one recognized channel
-            result[cp_name] = entry
-    return result
-
 def to_float(v):
     try:
         if pd.isna(v) or str(v).strip() == "":
@@ -387,15 +307,17 @@ def round_df(df, decimals=1):
 
 # Builds a column_config dict: numeric columns get 1-decimal NumberColumns, text_cols
 # get TextColumns, and any column named in disabled_cols is locked from editing.
-def build_column_config(df, disabled_cols=None, text_cols=None):
+def build_column_config(df, disabled_cols=None, text_cols=None, labels=None):
     disabled_cols = set(disabled_cols or [])
     text_cols = set(text_cols or [])
+    labels = labels or {}   # {"tf-6": "tf Box"} — shown name only; the data key never changes
     config = {}
     for col in df.columns:
+        shown = labels.get(col, col)
         if col in text_cols:
-            config[col] = st.column_config.TextColumn(col, disabled=(col in disabled_cols))
+            config[col] = st.column_config.TextColumn(shown, disabled=(col in disabled_cols))
         else:
-            config[col] = st.column_config.NumberColumn(col, format="%.1f", disabled=(col in disabled_cols))
+            config[col] = st.column_config.NumberColumn(shown, format="%.1f", disabled=(col in disabled_cols))
     return config
 
 # Wraps st.data_editor with a snapshot-based Undo/Redo stack. NOTE: this is whole-table
@@ -605,7 +527,7 @@ def render_simple_html_table(df, highlight_missing_cols=None):
 # Builds a single-row Pulldown dataframe with a fixed, consistent column order
 # (tf-1..5, tc-1..3, tvc, S2, Sensor), regardless of the underlying dict's key order.
 # sensor_value may be None if no Sensor reading was ever found for this record.
-def build_pulldown_df(pulldown_data_dict, sensor_value):
+def build_pulldown_df(pulldown_data_dict, sensor_value, sensors=None):
     # Group every "{prefix}-{number}" channel key present, in first-seen prefix order
     # and numeric order within each group — works for any cabinet, any count, not
     # just the original fixed tf-1..5/tc-1..3.
@@ -633,7 +555,12 @@ def build_pulldown_df(pulldown_data_dict, sensor_value):
         row[k] = v
 
     row["S2"] = pulldown_data_dict.get("S2", 0.0)
-    row["Sensor"] = sensor_value if sensor_value is not None else np.nan
+    if sensors:
+        # Every sensor found in the Pulldown file gets its own column, named as in the file
+        for sname, sval in sensors.items():
+            row[sname] = sval if sval is not None else np.nan
+    else:
+        row["Sensor"] = sensor_value if sensor_value is not None else np.nan
     return pd.DataFrame([row])
 
 # Computes tf-a (avg of tf-1..tf-5) and tc-a (avg of tc-1..tc-3) for a dict of sensor values
@@ -856,7 +783,7 @@ def extract_cabinet_channels(sheet_data, cabinet_config, sheet_labels=None):
                 if i in filled_from_fallback:
                     original_text = sheet_labels.get(filled_from_fallback[i], filled_from_fallback[i])
                     slot_labels[slot_key] = original_text
-                    fallback_descriptions.append(f"{slot_key} = \"{original_text}\"")
+                    fallback_descriptions.append(original_text)
 
         if matched_count == 0:
             notifications.append(f"⚠️ No thermocouples found for cabinet '{cab['name']}' — this cabinet's data was not collected.")
@@ -864,7 +791,7 @@ def extract_cabinet_channels(sheet_data, cabinet_config, sheet_labels=None):
             if matched_count < count:
                 notifications.append(f"⚠️ Only {matched_count} of {count} thermocouples found for cabinet '{cab['name']}' — using the {matched_count} found.")
             if fallback_descriptions:
-                notifications.append(f"ℹ️ Cabinet '{cab['name']}' extra channel mapping: {', '.join(fallback_descriptions)}")
+                notifications.append(f"ℹ️ Cabinet '{cab['name']}' also includes: {', '.join(fallback_descriptions)}")
 
     return channel_values, notifications, slot_labels
 
@@ -924,7 +851,7 @@ def match_pulldown_cpt_channels(pulldown_channels, cpt_channels, cpt_slot_labels
     notes = []
 
     def nice(k):
-        return f"{k} ({cpt_slot_labels[k]})" if k in cpt_slot_labels else k
+        return cpt_slot_labels.get(k, k)
 
     only_cpt = [nice(k) for k in c_keys if k not in set(p_keys)]
     only_pull = [k for k in p_keys if k not in set(c_keys)]
@@ -1162,47 +1089,6 @@ def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, targ
 
 
 # =================================================================
-# Checkpoint-refined predictions.
-# Elaborated Pulldown reports contain named checkpoint columns ("Hr: 1.0",
-# "tfa: -6.0", "tca: 8.0", ...) = the thermocouple readings at that moment of the
-# pulldown. For every checkpoint that exists in BOTH the new Pulldown file and at
-# least one stored run, this repeats the normal prediction using that checkpoint's
-# readings (instead of the average readings) as the pulldown features, trained only
-# on the stored runs that also have that checkpoint.
-# "Support" = how many stored runs have the checkpoint; it decides the confidence
-# label. Results come back sorted by support (then by number of thermocouples used).
-# The normal (average-based) prediction is unchanged and stays the baseline.
-# =================================================================
-def run_checkpoint_refined_simulations(volume_records, new_checkpoints, pulldown_sensor, target_sensor_pairs,
-                                       sensor_names=None, target_sensor_points=None, cabinet_config=None):
-    results = []
-    for cp_name, new_cp in (new_checkpoints or {}).items():
-        supporters = [r for r in volume_records
-                      if r.get("cpt_data") and isinstance(r.get("pulldown_checkpoints"), dict)
-                      and cp_name in r["pulldown_checkpoints"]]
-        if not supporters:
-            continue
-        common = [k for k in new_cp if all(k in r["pulldown_checkpoints"][cp_name] for r in supporters)]
-        if not common:
-            continue
-        pseudo_records = [{
-            "pulldown_data": {k: r["pulldown_checkpoints"][cp_name][k] for k in common},
-            "pulldown_baseline_sensor": r.get("pulldown_baseline_sensor", 0.0),
-            "cpt_data": r["cpt_data"],
-        } for r in supporters]
-        df = run_automated_simulation(
-            pseudo_records, [new_cp[k] for k in common], pulldown_sensor, target_sensor_pairs, common,
-            sensor_names=sensor_names, target_sensor_points=target_sensor_points, cabinet_config=cabinet_config)
-        if df.empty:
-            continue
-        n = len(supporters)
-        confidence = "High" if n >= 3 else ("Medium" if n == 2 else "Low")
-        results.append({"name": cp_name, "support": n, "confidence": confidence, "channels": len(common), "df": df})
-    results.sort(key=lambda r: (-r["support"], -r["channels"], r["name"]))
-    return results
-
-
-# =================================================================
 # 5. STREAMLIT USER INTERFACE (TABS) & REPOSITORY LOGIC
 # =================================================================
 
@@ -1394,7 +1280,6 @@ with tab1:
                 _sim_entry_code, _sim_test_id = extract_pulldown_entry_test_id(sim_pulldown_file)
                 st.session_state.active_pulldown_form['_entry_code'] = _sim_entry_code
                 st.session_state.active_pulldown_form['_test_id'] = _sim_test_id
-                st.session_state.active_pulldown_form['_checkpoints'] = extract_pulldown_checkpoints(sim_pulldown_file)
 
                 st.session_state.last_uploaded_sim_file = sim_pulldown_file
                 # Increment key version to instantly clear old component cache and force update UI inputs
@@ -1420,7 +1305,12 @@ with tab1:
         for _note in _cab_notifications:
             st.caption(_note)
 
-        _slot_labels = st.session_state.active_pulldown_form.get('_slot_labels', {})
+        # Names of extra thermocouples (e.g. tf-6 -> "tf Box"): from saved training runs,
+        # overridden by the freshly uploaded Pulldown file if it has its own names
+        _slot_labels = {}
+        for _r in vol_records:
+            _slot_labels.update(_r.get("channel_labels") or {})
+        _slot_labels.update(st.session_state.active_pulldown_form.get('_slot_labels', {}))
         default_defaults = {'tf-1': -24.4, 'tf-2': -21.8, 'tf-3': -22.8, 'tf-4': -26.2, 'tf-5': -26.4, 'tc-1': 1.9, 'tc-2': 1.6, 'tc-3': 0.5}
 
         new_pulldown_input = []
@@ -1438,7 +1328,7 @@ with tab1:
                     curr_val = default_defaults.get(feat, 0.0)
 
                 # Show which physical channel a fallback-matched slot (e.g. "tf Box") came from
-                label = f"{feat} ({_slot_labels[feat]}):" if feat in _slot_labels else f"{feat}:"
+                label = f"{_slot_labels[feat]}:" if feat in _slot_labels else f"{feat}:"
 
                 # Bound dynamic widget version to key parameters to force a redraw when new files parse
                 val = col.number_input(
@@ -1574,36 +1464,9 @@ with tab1:
                     else:
                         st.markdown("### 📊 Consolidated Predictive Simulation Output Matrix")
                         df_final_predictions = round_df(add_avg_columns(df_final_predictions))
+                        df_final_predictions = df_final_predictions.rename(columns=_slot_labels)
                         st.markdown(render_merged_predictions_table(df_final_predictions), unsafe_allow_html=True)
 
-                        # ---- Checkpoint-refined predictions (optional extra, baseline above is unchanged) ----
-                        _new_cps = st.session_state.active_pulldown_form.get('_checkpoints') or {}
-                        _stored_have_cps = any(r.get("pulldown_checkpoints") for r in vol_records)
-                        if _new_cps and _stored_have_cps:
-                            with st.spinner("Refining with Pulldown checkpoints..."):
-                                _cp_results = run_checkpoint_refined_simulations(
-                                    vol_records, _new_cps, new_pulldown_sensor, target_sensor_pairs,
-                                    sensor_names=sensor_names_for_tab1, target_sensor_points=target_sensor_pairs_all,
-                                    cabinet_config=get_cabinet_sensor_config(selected_volume, selected_arrangement))
-                            if _cp_results:
-                                st.markdown("### 📍 Checkpoint-Refined Predictions")
-                                st.caption(
-                                    "Each block repeats the prediction using the readings at one Pulldown checkpoint. "
-                                    "Confidence depends on how many stored runs contain that same checkpoint "
-                                    "(3 or more = High, 2 = Medium, 1 = Low). Sorted with the best-supported first."
-                                )
-                                for _res in _cp_results:
-                                    _icon = {"High": "🟢", "Medium": "🟡", "Low": "🟠"}[_res["confidence"]]
-                                    with st.expander(
-                                        f"{_icon} {_res['name']} — {_res['confidence']} confidence "
-                                        f"({_res['support']} stored run(s), {_res['channels']} thermocouples used)"
-                                    ):
-                                        _cp_df = round_df(add_avg_columns(_res["df"]))
-                                        st.markdown(render_merged_predictions_table(_cp_df), unsafe_allow_html=True)
-                            else:
-                                st.info("📍 No checkpoint in this Pulldown file matches a checkpoint stored in your training runs, so no refined prediction was made.")
-                        elif _new_cps and not _stored_have_cps:
-                            st.info("📍 This Pulldown file has checkpoints, but none of your stored training runs do — only the normal prediction is shown.")
 
 # ================= TAB 2: DATA REPOSITORY ROOM =================
 with tab2:
@@ -1788,12 +1651,9 @@ with tab2:
 
                 # None (not 0.0) when the file has no "Sensor" row — 0.0 could be a real reading
                 resolved_sensor = find_sensor_reading(sheet_data)
-
-                # Optional richer data: named checkpoint columns (e.g. "tfa: -6.0",
-                # "tca: 8.0") found in elaborated Pulldown report formats. Empty {} for
-                # simple/Summary-style files — the baseline Avg-only path above is
-                # unaffected either way.
-                pulldown_checkpoints = extract_pulldown_checkpoints(repo_pulldown_file)
+                # Every "Sensor ..." reading in the Pulldown file, named as in the file
+                pulldown_sensors_all = find_all_sensor_readings(sheet_data, sheet_labels)
+                # (only sensors that also exist in the CPT file are kept, once the CPT is parsed — see below)
 
                 # Entry Code / Test ID from the Pulldown file — typically embedded in its
                 # filename (e.g. "PCT-2_Report_307L_F-12043_R029809.xlsx"), with a cell-scan
@@ -1833,6 +1693,7 @@ with tab2:
                 
                 # 2. PARSE CPT DATA
                 cpt_match_notes = []   # Pulldown <-> CPT thermocouple matching messages
+                cpt_slot_labels_all = {}  # e.g. {"tf-6": "tf Box"} names found in the CPT file
                 cpt_structured = {}
                 parsed_successfully = False
 
@@ -2072,6 +1933,7 @@ with tab2:
                                 # present in BOTH files are stored next to the fixed ones
                                 _row_ch, _row_notes, _row_labels = extract_cpt_row_channels(ws_a2, data_row, cpt_channel_cols_a2, _cab_cfg_a2)
                                 if not _cpt_match_done_a2:
+                                    cpt_slot_labels_all.update(_row_labels)
                                     _, _m_notes = match_pulldown_cpt_channels(p_extracted, _row_ch, _row_labels)
                                     cpt_match_notes.extend([n for n in _row_notes if n.startswith('ℹ️')] + _m_notes)  # per-cabinet 'not found' warnings are covered by the match notes
                                     _cpt_match_done_a2 = True
@@ -2203,12 +2065,18 @@ with tab2:
                     st.error("❌ Nothing was saved. Please rework the file(s) and upload again:\n\n" + "\n".join(f"- {m}" for m in _missing_report))
                     st.stop()
 
+                _cpt_sensor_norms = {normalize_sensor_name(n) for n in sensor_names_in_cpt_data(cpt_structured)}
+                if _cpt_sensor_norms:
+                    pulldown_sensors_all = {n: v for n, v in pulldown_sensors_all.items() if normalize_sensor_name(n) in _cpt_sensor_norms}
+
                 new_block = {
                     "pulldown_baseline_sensor": resolved_sensor,
                     "original_pulldown_baseline_sensor": resolved_sensor,
+                    "pulldown_sensors": copy.deepcopy(pulldown_sensors_all),
+                    "original_pulldown_sensors": copy.deepcopy(pulldown_sensors_all),
+                    "channel_labels": {**cpt_slot_labels_all, **repo_slot_labels},
                     "entry_code": entry_code,
                     "test_id": test_id,
-                    "pulldown_checkpoints": copy.deepcopy(pulldown_checkpoints),
                     "original_pulldown_data": copy.deepcopy(p_extracted),
                     "original_cpt_data": copy.deepcopy(cpt_structured),
                     "pulldown_data": copy.deepcopy(p_extracted),
@@ -2229,8 +2097,6 @@ with tab2:
                     st.caption(_note)
                 for _note in cpt_match_notes:
                     st.caption(_note)
-                if pulldown_checkpoints:
-                    st.info(f"📍 Also captured {len(pulldown_checkpoints)} named checkpoint(s) from the Pulldown file: {', '.join(pulldown_checkpoints.keys())}")
                 st.rerun()
             except Exception:
                 import traceback
@@ -2308,7 +2174,11 @@ with tab3:
                     c_btn1, c_btn2 = st.columns([4, 1])
                     with c_btn1:
                         _baseline_sensor_display = record.get('pulldown_baseline_sensor')
-                        _baseline_sensor_text = "No data" if _baseline_sensor_display is None else f"{_baseline_sensor_display}°C"
+                        _rec_sensors_hdr = record.get('pulldown_sensors') or {}
+                        if _rec_sensors_hdr:
+                            _baseline_sensor_text = ", ".join(f"{n}: {v}°C" for n, v in _rec_sensors_hdr.items())
+                        else:
+                            _baseline_sensor_text = "No data" if _baseline_sensor_display is None else f"{_baseline_sensor_display}°C"
                         st.markdown(f"**Baseline Sensor Target Setting:** `{_baseline_sensor_text}`")
                         _test_id_display = record.get('test_id')
                         st.caption(f"Entry Code: `{_entry_code_display or 'Not found'}`  |  Test ID: `{_test_id_display or 'Not found'}`")
@@ -2329,14 +2199,19 @@ with tab3:
                     # Section A: Display Pulldown Data Summary Table
                     st.markdown("#### 🔹 Counted Pulldown Matrix")
 
-                    p_df = round_df(add_avg_columns(build_pulldown_df(record["pulldown_data"], record.get("pulldown_baseline_sensor"))))
+                    _ch_labels = record.get("channel_labels") or {}   # {"tf-6": "tf Box"} display names
+                    _p_sensor_names = list((record.get("pulldown_sensors") or {}).keys())
+                    _p_sensor_cols = _p_sensor_names or ["Sensor"]
+                    p_df = round_df(add_avg_columns(build_pulldown_df(record["pulldown_data"], record.get("pulldown_baseline_sensor"), record.get("pulldown_sensors"))))
                     
                     if "original_pulldown_data" not in record:
                         record["original_pulldown_data"] = record["pulldown_data"].copy()
                     if "original_pulldown_baseline_sensor" not in record:
                         record["original_pulldown_baseline_sensor"] = record.get("pulldown_baseline_sensor")
+                    if "original_pulldown_sensors" not in record and record.get("pulldown_sensors"):
+                        record["original_pulldown_sensors"] = dict(record["pulldown_sensors"])
 
-                    original_p_df = round_df(add_avg_columns(build_pulldown_df(record["original_pulldown_data"], record.get("original_pulldown_baseline_sensor"))))
+                    original_p_df = round_df(add_avg_columns(build_pulldown_df(record["original_pulldown_data"], record.get("original_pulldown_baseline_sensor"), record.get("original_pulldown_sensors"))))
 
                     pulldown_edit_mode_key = f"pulldown_edit_mode_{p_inspect_key}_{c_inspect_key}_{run_idx}"
                     if pulldown_edit_mode_key not in st.session_state:
@@ -2346,9 +2221,9 @@ with tab3:
                     if not st.session_state[pulldown_edit_mode_key]:
                         # VIEW MODE — same table style as the Original table below; Sensor is
                         # highlighted red if no reading was ever found for this record
-                        st.markdown(render_simple_html_table(p_df, highlight_missing_cols=["Sensor"]), unsafe_allow_html=True)
-                        if pd.isna(p_df.iloc[0]["Sensor"]):
-                            st.caption(":red[⚠️ No Sensor reading on file for this record.]")
+                        st.markdown(render_simple_html_table(p_df.rename(columns=_ch_labels), highlight_missing_cols=_p_sensor_cols), unsafe_allow_html=True)
+                        if any(pd.isna(p_df.iloc[0][_sc]) for _sc in _p_sensor_cols):
+                            st.caption(":red[⚠️ A Sensor reading is missing for this record.]")
                         if st.button("✏️ Edit Pulldown Matrix", key=f"p_edit_toggle_on_{run_idx}_v{current_ver}"):
                             st.session_state[pulldown_edit_mode_key] = True
                             st.rerun()
@@ -2363,10 +2238,10 @@ with tab3:
                         edited_p_df = undoable_data_editor(
                             p_undo_base_key,
                             p_df,
-                            build_column_config(p_df, disabled_cols=avg_column_names(p_df))
+                            build_column_config(p_df, disabled_cols=avg_column_names(p_df.drop(columns=_p_sensor_cols, errors="ignore")), labels=_ch_labels)
                         )
-                        if pd.isna(edited_p_df.iloc[0]["Sensor"]):
-                            st.caption(":red[⚠️ Sensor is empty — enter a value above if available.]")
+                        if any(pd.isna(edited_p_df.iloc[0][_sc]) for _sc in _p_sensor_cols):
+                            st.caption(":red[⚠️ A Sensor is empty — enter a value above if available.]")
 
                         if st.button("❌ Cancel Editing", key=f"p_edit_cancel_{run_idx}_v{current_ver}"):
                             reset_undo_state(p_undo_base_key)
@@ -2375,7 +2250,7 @@ with tab3:
                     
                     st.markdown("##### 📄 Original Uploaded Pulldown Matrix")
                     # Always reflects the file as first uploaded — never touched by edits
-                    st.markdown(render_simple_html_table(original_p_df, highlight_missing_cols=["Sensor"]), unsafe_allow_html=True)
+                    st.markdown(render_simple_html_table(original_p_df.rename(columns=_ch_labels), highlight_missing_cols=_p_sensor_cols), unsafe_allow_html=True)
                     
                     # Section B: Display CPT Multivariable Flags Data Matrix
                     st.markdown("#### 🔹 Counted Positions for CPT Matrix")
@@ -2454,7 +2329,7 @@ with tab3:
                         if not st.session_state[cpt_edit_mode_key]:
                             # VIEW MODE — same real merged-cell (rowspan) look as the Original table below,
                             # reflecting the current (possibly already-edited) values
-                            st.markdown(render_merged_cpt_table(cpt_df), unsafe_allow_html=True)
+                            st.markdown(render_merged_cpt_table(cpt_df.rename(columns=_ch_labels)), unsafe_allow_html=True)
                             if st.button("✏️ Edit CPT Matrix", key=f"cpt_edit_toggle_on_{run_idx}_v{current_ver}"):
                                 st.session_state[cpt_edit_mode_key] = True
                                 st.rerun()
@@ -2470,7 +2345,8 @@ with tab3:
                                 build_column_config(
                                     cpt_df,
                                     disabled_cols=avg_column_names(cpt_df) + ["Test Flag", "Metric"],
-                                    text_cols=["Test Flag", "Metric"]
+                                    text_cols=["Test Flag", "Metric"],
+                                    labels=_ch_labels
                                 )
                             )
 
@@ -2481,7 +2357,7 @@ with tab3:
 
                         st.markdown("##### 📄 Original Uploaded CPT Matrix")
                         # Always reflects the file as first uploaded — never touched by edits
-                        st.markdown(render_merged_cpt_table(original_cpt_df), unsafe_allow_html=True)
+                        st.markdown(render_merged_cpt_table(original_cpt_df.rename(columns=_ch_labels)), unsafe_allow_html=True)
 
                         # Detect changes
                         pulldown_changed = not edited_p_df.equals(p_df)
@@ -2505,9 +2381,18 @@ with tab3:
                             # Save Pulldown Matrix (average columns are computed display-only
                             # fields, never stored). Sensor lives separately as
                             # pulldown_baseline_sensor, not inside pulldown_data.
-                            sensor_row_val = edited_p_df.iloc[0].get("Sensor")
-                            record["pulldown_baseline_sensor"] = None if pd.isna(sensor_row_val) else float(sensor_row_val)
-                            record["pulldown_data"] = edited_p_df.drop(columns=avg_column_names(edited_p_df) + ["Sensor"], errors="ignore").iloc[0].to_dict()
+                            _avg_cols_saved = avg_column_names(edited_p_df.drop(columns=_p_sensor_cols, errors="ignore"))
+                            if _p_sensor_names:
+                                record["pulldown_sensors"] = {
+                                    n: (None if pd.isna(edited_p_df.iloc[0][n]) else float(edited_p_df.iloc[0][n]))
+                                    for n in _p_sensor_names
+                                }
+                                _first_val = record["pulldown_sensors"][_p_sensor_names[0]]
+                                record["pulldown_baseline_sensor"] = _first_val
+                            else:
+                                sensor_row_val = edited_p_df.iloc[0].get("Sensor")
+                                record["pulldown_baseline_sensor"] = None if pd.isna(sensor_row_val) else float(sensor_row_val)
+                            record["pulldown_data"] = edited_p_df.drop(columns=_avg_cols_saved + _p_sensor_cols, errors="ignore").iloc[0].to_dict()
 
                             # Save CPT Matrix — reassemble the 4 rows per flag back into the nested structure
                             label_to_key = {v: k for k, v in metric_labels.items()}

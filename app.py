@@ -882,7 +882,8 @@ def compute_cabinet_averages(channel_values, cabinet_config):
 
 # =================================================================
 def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, target_sensor_pairs, pulldown_feature_keys,
-                             sensor_names=None, target_sensor_points=None, cabinet_config=None):
+                             sensor_names=None, target_sensor_points=None, cabinet_config=None,
+                             pulldown_sensor_values=None):
     """
     Builds the consolidated prediction table. Every query point produces 4 rows —
     Mean, Min, Max, (Max+Min)/2.
@@ -1011,6 +1012,16 @@ def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, targ
                 return chosen or None
         return None
 
+    pulldown_sensor_values = {normalize_sensor_name(k): v for k, v in (pulldown_sensor_values or {}).items()}
+
+    def stored_baseline(record, sensor):
+        """Pulldown reading of `sensor` in a stored run (falls back to the run's single baseline)."""
+        want = normalize_sensor_name(sensor)
+        for n, v in (record.get("pulldown_sensors") or {}).items():
+            if normalize_sensor_name(n) == want and v is not None:
+                return clean_val(v)
+        return clean_val(record.get("pulldown_baseline_sensor", 0.0))
+
     def predict_one(metric_key, sensor, q_min, q_max):
         """{field: predicted value} for one sensor, or {} if no usable stored runs."""
         X, Y = [], []
@@ -1018,7 +1029,7 @@ def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, targ
             if not record.get('cpt_data'):
                 continue
             p_features = [clean_val(get_pulldown_feature_value(record["pulldown_data"], f)) for f in pulldown_feature_keys]
-            p_baseline = clean_val(record.get("pulldown_baseline_sensor", 0.0))
+            p_baseline = stored_baseline(record, sensor)
             for flag, level_data in record["cpt_data"].items():
                 metric_data = level_data.get(metric_key) if isinstance(level_data, dict) else None
                 if not metric_data:
@@ -1036,7 +1047,8 @@ def run_automated_simulation(volume_records, new_pulldown, pulldown_sensor, targ
             return {}
         X_arr = np.nan_to_num(np.array(X, dtype=np.float64), nan=0.0)
         q = np.nan_to_num(np.array(
-            [clean_val(v) for v in new_pulldown] + [clean_val(pulldown_sensor), feature_for_metric(metric_key, q_min, q_max)],
+            [clean_val(v) for v in new_pulldown]
+            + [clean_val(pulldown_sensor_values.get(normalize_sensor_name(sensor), pulldown_sensor)), feature_for_metric(metric_key, q_min, q_max)],
             dtype=np.float64).reshape(1, -1), nan=0.0)
         fields = target_fields + (["S2"] if metric_key == "mean" else [])
         out = {}
@@ -1269,6 +1281,9 @@ with tab1:
                 # Sensor is tracked separately from the cabinet channels — only set if the
                 # uploaded file actually has a "Sensor" reading; otherwise leave it absent
                 # so the field shows empty/highlighted rather than a fabricated number
+                # Every "Sensor ..." reading in the file, keyed by normalized name (e.g. "sensorfc")
+                _all_file_sensors = find_all_sensor_readings(sheet_data, sheet_labels)
+                st.session_state.active_pulldown_form['_sensors'] = {normalize_sensor_name(k): v for k, v in _all_file_sensors.items()}
                 found_sensor = find_sensor_reading(sheet_data)
                 if found_sensor is not None:
                     st.session_state.active_pulldown_form['Sensor'] = found_sensor
@@ -1347,57 +1362,90 @@ with tab1:
         # Sensor is a genuinely distinct reading (from the pulldown file's own "Sensor" row),
         # kept separate from the 10 fields above. Same behavior as tf-1..S2: auto-filled and
         # editable when found in the file; empty, highlighted, and editable when not found.
-        sensor_missing_in_file = 'Sensor' not in st.session_state.active_pulldown_form
-        sensor_widget_key = f"sim_inp_{p_key}_{c_key}_Sensor_v{st.session_state.sim_ver}"
+        sensor_names_for_tab1 = discover_sensor_names(vol_records)
+        _file_sensors = st.session_state.active_pulldown_form.get('_sensors', {})
+        new_pulldown_sensors = {}
+        _sensor_missing_names = []
 
-        sensor_col, caption_col = st.columns([1, 3])
-        if sensor_missing_in_file:
-            with sensor_col:
-                new_pulldown_sensor = st.number_input(
-                    "Sensor (°C):",
-                    value=None,
-                    step=0.1,
-                    format="%.1f",
-                    placeholder="No data",
-                    key=sensor_widget_key
-                )
-            with caption_col:
-                if new_pulldown_sensor is None:
-                    # Best-effort visual highlight — targets the input by its accessible label.
-                    # If a future Streamlit version renders this differently, the highlight simply
-                    # won't apply; the empty field and caption below still make the gap clear.
-                    st.markdown(
-                        "<style>input[aria-label='Sensor (°C):']{border:2px solid #ff4b4b !important; "
-                        "background-color:rgba(255,75,75,0.12) !important;}</style>",
-                        unsafe_allow_html=True
+        if sensor_names_for_tab1 != ["Sensor"]:
+            # One Pulldown reading per sensor of the training data (e.g. Sensor FC, Sensor PC),
+            # auto-filled from the uploaded file by name, editable, required.
+            st.markdown("**Pulldown Sensor readings**")
+            _s_cols = st.columns(min(len(sensor_names_for_tab1), 4))
+            for _i, _sname in enumerate(sensor_names_for_tab1):
+                _norm = normalize_sensor_name(_sname)
+                _file_val = _file_sensors.get(_norm)
+                with _s_cols[_i % len(_s_cols)]:
+                    _val = st.number_input(
+                        f"{_sname} (°C):",
+                        value=None if _file_val is None else round(float(_file_val), 1),
+                        step=0.1, format="%.1f",
+                        placeholder="No data",
+                        key=f"sim_inp_{p_key}_{c_key}_Sensor_{_norm}_v{st.session_state.sim_ver}"
                     )
-                    st.markdown(
-                        ":red[⚠️ No Sensor reading found in the uploaded pulldown file — please enter it manually.]"
-                    )
-                else:
-                    st.markdown(":blue[✏️ Sensor value entered manually.]")
+                    if _val is None:
+                        st.markdown(f":red[⚠️ {_sname} not found in the file — enter it.]")
+                        _sensor_missing_names.append(_sname)
+                    elif _file_val is not None and _val == round(float(_file_val), 1):
+                        st.markdown(":green[✅ Found in the uploaded file.]")
+                    else:
+                        st.markdown(":blue[✏️ Entered manually.]")
+                new_pulldown_sensors[_sname] = _val
+            new_pulldown_sensor = new_pulldown_sensors[sensor_names_for_tab1[0]]
         else:
-            _file_sensor_val = round(float(st.session_state.active_pulldown_form['Sensor']), 1)
-            with sensor_col:
-                new_pulldown_sensor = st.number_input(
-                    "Sensor (°C):",
-                    value=_file_sensor_val,
-                    step=0.1,
-                    format="%.1f",
-                    key=sensor_widget_key
-                )
-            with caption_col:
-                if new_pulldown_sensor == _file_sensor_val:
-                    st.markdown(":green[✅ Sensor reading found in the uploaded file.]")
-                else:
-                    st.markdown(":blue[✏️ Sensor value entered manually.]")
+            sensor_missing_in_file = 'Sensor' not in st.session_state.active_pulldown_form
+            sensor_widget_key = f"sim_inp_{p_key}_{c_key}_Sensor_v{st.session_state.sim_ver}"
+
+            sensor_col, caption_col = st.columns([1, 3])
+            if sensor_missing_in_file:
+                with sensor_col:
+                    new_pulldown_sensor = st.number_input(
+                        "Sensor (°C):",
+                        value=None,
+                        step=0.1,
+                        format="%.1f",
+                        placeholder="No data",
+                        key=sensor_widget_key
+                    )
+                with caption_col:
+                    if new_pulldown_sensor is None:
+                        # Best-effort visual highlight — targets the input by its accessible label.
+                        # If a future Streamlit version renders this differently, the highlight simply
+                        # won't apply; the empty field and caption below still make the gap clear.
+                        st.markdown(
+                            "<style>input[aria-label='Sensor (°C):']{border:2px solid #ff4b4b !important; "
+                            "background-color:rgba(255,75,75,0.12) !important;}</style>",
+                            unsafe_allow_html=True
+                        )
+                        st.markdown(
+                            ":red[⚠️ No Sensor reading found in the uploaded pulldown file — please enter it manually.]"
+                        )
+                    else:
+                        st.markdown(":blue[✏️ Sensor value entered manually.]")
+            else:
+                _file_sensor_val = round(float(st.session_state.active_pulldown_form['Sensor']), 1)
+                with sensor_col:
+                    new_pulldown_sensor = st.number_input(
+                        "Sensor (°C):",
+                        value=_file_sensor_val,
+                        step=0.1,
+                        format="%.1f",
+                        key=sensor_widget_key
+                    )
+                with caption_col:
+                    if new_pulldown_sensor == _file_sensor_val:
+                        st.markdown(":green[✅ Sensor reading found in the uploaded file.]")
+                    else:
+                        st.markdown(":blue[✏️ Sensor value entered manually.]")
             
+            if new_pulldown_sensor is None:
+                _sensor_missing_names = ["Sensor"]
+
         st.markdown("---")
         
         # ================= STEP 2: SET MULTI-SENSOR SIMULATION STEPS =================
         st.markdown("#### Step 2: Set Multi-Sensor Simulation Steps")
 
-        sensor_names_for_tab1 = discover_sensor_names(vol_records)
         if len(sensor_names_for_tab1) > 1:
             st.caption(
                 f"Training data has {len(sensor_names_for_tab1)} sensors: {', '.join(sensor_names_for_tab1)}. "
@@ -1421,15 +1469,16 @@ with tab1:
                 st.markdown(f"**Point {idx+1}**")
                 point_pairs = {}
                 for sensor_name in sensor_names_for_tab1:
+                    st.markdown(f"**{sensor_name}**")
                     min_val = st.number_input(
-                        f"{sensor_name} Min (°C):",
+                        "Min (°C):",
                         value=default_min_val,
                         step=0.1,
                         format="%.1f",
                         key=f"q_s_min_{p_key}_{c_key}_{idx}_{sensor_name}"
                     )
                     max_val = st.number_input(
-                        f"{sensor_name} Max (°C):",
+                        "Max (°C):",
                         value=default_max_val,
                         step=0.1,
                         format="%.1f",
@@ -1441,8 +1490,7 @@ with tab1:
             
         if st.button("🚀 Generate Predictive CPT Dataset Matrices", type="primary"):
             _missing_inputs = []
-            if new_pulldown_sensor is None:
-                _missing_inputs.append("Sensor")
+            _missing_inputs.extend(_sensor_missing_names)
             if 'S2' in pulldown_feature_keys and new_pulldown_input[pulldown_feature_keys.index('S2')] is None:
                 _missing_inputs.append("S2")
 
@@ -1456,7 +1504,8 @@ with tab1:
                     df_final_predictions = run_automated_simulation(
                         vol_records, new_pulldown_input, new_pulldown_sensor, target_sensor_pairs, pulldown_feature_keys,
                         sensor_names=sensor_names_for_tab1, target_sensor_points=target_sensor_pairs_all,
-                        cabinet_config=get_cabinet_sensor_config(selected_volume, selected_arrangement)
+                        cabinet_config=get_cabinet_sensor_config(selected_volume, selected_arrangement),
+                        pulldown_sensor_values=new_pulldown_sensors or None
                     )
 
                     if df_final_predictions.empty:
@@ -1677,20 +1726,23 @@ with tab2:
                 finally:
                     repo_cpt_file.seek(0)  # rewind so the strategies below read from the start
 
-                # Cross-check: the Pulldown and CPT files should describe the same test run.
-                # Prefer the CPT-side value when both are found and agree; warn if they disagree
-                # (likely mismatched files uploaded together by mistake), and fall back to
-                # whichever single source found a value if the other didn't find one at all.
-                if entry_code and pulldown_entry_code and entry_code.upper() != pulldown_entry_code.upper():
-                    st.warning(f"⚠️ Entry Code mismatch: CPT file says '{entry_code}', Pulldown file says '{pulldown_entry_code}'. Double-check you uploaded matching files.")
-                elif not entry_code:
-                    entry_code = pulldown_entry_code
+                # Each file keeps its OWN Entry Code and Test ID. The CPT file is read from its
+                # cells first, then its filename; the Pulldown file was read above.
+                cpt_entry_code, cpt_test_id = entry_code, test_id
+                if not cpt_entry_code or not cpt_test_id:
+                    _fn_entry, _fn_test = extract_pulldown_entry_test_id(repo_cpt_file)
+                    cpt_entry_code = cpt_entry_code or _fn_entry
+                    cpt_test_id = cpt_test_id or _fn_test
 
-                if test_id and pulldown_test_id and test_id.upper() != pulldown_test_id.upper():
-                    st.warning(f"⚠️ Test ID mismatch: CPT file says '{test_id}', Pulldown file says '{pulldown_test_id}'. Double-check you uploaded matching files.")
-                elif not test_id:
-                    test_id = pulldown_test_id
-                
+                # Both files should belong to the same product (same Entry Code). Test IDs are
+                # expected to differ (a Pulldown test and a CPT test are different tests).
+                if cpt_entry_code and pulldown_entry_code and cpt_entry_code.upper() != pulldown_entry_code.upper():
+                    st.warning(f"⚠️ Entry Code mismatch: CPT file says '{cpt_entry_code}', Pulldown file says '{pulldown_entry_code}'. Double-check you uploaded matching files.")
+
+                # Single values kept for the record title / older records
+                entry_code = cpt_entry_code or pulldown_entry_code
+                test_id = cpt_test_id or pulldown_test_id
+
                 # 2. PARSE CPT DATA
                 cpt_match_notes = []   # Pulldown <-> CPT thermocouple matching messages
                 cpt_slot_labels_all = {}  # e.g. {"tf-6": "tf Box"} names found in the CPT file
@@ -2077,6 +2129,10 @@ with tab2:
                     "channel_labels": {**cpt_slot_labels_all, **repo_slot_labels},
                     "entry_code": entry_code,
                     "test_id": test_id,
+                    "pulldown_entry_code": pulldown_entry_code,
+                    "pulldown_test_id": pulldown_test_id,
+                    "cpt_entry_code": cpt_entry_code,
+                    "cpt_test_id": cpt_test_id,
                     "original_pulldown_data": copy.deepcopy(p_extracted),
                     "original_cpt_data": copy.deepcopy(cpt_structured),
                     "pulldown_data": copy.deepcopy(p_extracted),
@@ -2180,8 +2236,19 @@ with tab3:
                         else:
                             _baseline_sensor_text = "No data" if _baseline_sensor_display is None else f"{_baseline_sensor_display}°C"
                         st.markdown(f"**Baseline Sensor Target Setting:** `{_baseline_sensor_text}`")
-                        _test_id_display = record.get('test_id')
-                        st.caption(f"Entry Code: `{_entry_code_display or 'Not found'}`  |  Test ID: `{_test_id_display or 'Not found'}`")
+                        if any(k in record for k in ("pulldown_entry_code", "pulldown_test_id", "cpt_entry_code", "cpt_test_id")):
+                            st.caption(
+                                f"📄 Pulldown file — Entry Code: `{record.get('pulldown_entry_code') or 'Not found'}`  |  "
+                                f"Test ID: `{record.get('pulldown_test_id') or 'Not found'}`"
+                            )
+                            st.caption(
+                                f"📄 CPT file — Entry Code: `{record.get('cpt_entry_code') or 'Not found'}`  |  "
+                                f"Test ID: `{record.get('cpt_test_id') or 'Not found'}`"
+                            )
+                        else:
+                            # Older record saved before each file's IDs were kept separately
+                            _test_id_display = record.get('test_id')
+                            st.caption(f"Entry Code: `{_entry_code_display or 'Not found'}`  |  Test ID: `{_test_id_display or 'Not found'}`")
                     with c_btn2:
                         if st.button("🗑️ Delete Dataset", key=f"del_ds_{p_inspect_key}_{c_inspect_key}_{run_idx}"):
                             records.pop(run_idx)
